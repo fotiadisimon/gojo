@@ -1,0 +1,28 @@
+# 敏感配置
+.env
+config.json
+
+# 数据库
+data.db
+*.db-journal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node / Expo
+app/node_modules/
+app/.expo/
+app/dist/
+app/web-build/
+
+# 系统 / 编辑器
+.DS_Store
+.vscode/
+.idea/
+*.log

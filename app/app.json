@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Gojo Simple",
+    "slug": "gojo-simple",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#070d1a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.gojosimple"
+    },
+    "android": {
+      "package": "com.example.gojosimple",
+      "adaptiveIcon": {
+        "backgroundColor": "#070d1a"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 App 访问相册以选择要发送给 AI 的图片",
+          "cameraPermission": "允许 App 使用相机以拍照发送给 AI"
+        }
+      ]
+    ],
+    "scheme": "gojosimple"
+  }
+}

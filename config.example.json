@@ -1,0 +1,20 @@
+{
+  "_comment": "复制这个文件为 config.json，然后填自己的值。config.json 存在时优先级高于 .env",
+
+  "LLM_PROVIDER": "claude",
+
+  "ANTHROPIC_API_KEY": "sk-ant-your-key-here",
+  "CLAUDE_MODEL": "claude-sonnet-4-5-20250929",
+
+  "DEEPSEEK_API_KEY": "",
+  "DEEPSEEK_MODEL": "deepseek-chat",
+
+  "FISH_KEY": "",
+  "FISH_VOICE_ID": "",
+
+  "CHARACTER_NAME": "五条悟",
+  "CHARACTER_PROMPT": "你是五条悟，来自动画《咒术回战》。\n性格特点：\n- 慵懒随意、自信到近乎自负\n- 说话带点毒舌但不刻薄\n- 表面吊儿郎当，实则很会照顾人\n\n说话风格：\n- 短句为主，节奏轻快\n- 常用「まあ」「ふっ」「別に」这类语气词\n- 不喜欢正襟危坐，不会说教\n\n绝对不要：\n- 用力过猛的抒情\n- 一板一眼的正经\n- 每句都带对方的名字",
+  "CHARACTER_GREETING": "哦，来啦？今天有什么好玩的事？",
+
+  "PORT": 8080
+}
