@@ -11,9 +11,9 @@ import {
   ActivityIndicator, Platform, ScrollView, StatusBar,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import { C, SERVER_URL } from '../../constants/theme';
+import { C, SERVER_URL, FIXED_USER_ID } from '../../constants/theme';
 
-const FIXED_USER_ID = 'user_mofpiyd7442ia7';
+
 
 interface CharacterMeta {
   id: string;

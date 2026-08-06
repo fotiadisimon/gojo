@@ -8,10 +8,9 @@ import {
   TouchableOpacity, View
 } from 'react-native';
 import ChibiSprite from '../../components/ChibiSprite';
-import { C, SERVER_URL } from '../../constants/theme';
+import { C, SERVER_URL, FIXED_USER_ID } from '../../constants/theme';
 
 const USER_ID_KEY    = 'gojo_user_id';
-const FIXED_USER_ID  = 'user_mofpiyd7442ia7';
 const DAYS_CACHE_KEY = 'gojo_chat_days';  
 const DIARY_CHARACTER = 'gojo';   
 const STATS_THROTTLE_MS = 30_000;   // ★ 30 秒内不重复调 /stats

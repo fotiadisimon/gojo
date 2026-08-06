@@ -41,14 +41,16 @@ def get_character(character_id: str):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        '''SELECT id, name, name_en, avatar_url, voice_id, core_prompt, greeting
+        '''SELECT id, name, name_en, avatar_url, voice_id, core_prompt, greeting,
+                  COALESCE(canon_lock, '')
            FROM characters WHERE id = %s''', (character_id,))
     row = cur.fetchone()
     cur.close(); conn.close()
     if not row: return None
     return {'id': row[0], 'name': row[1], 'name_en': row[2],
             'avatar_url': row[3], 'voice_id': row[4],
-            'core_prompt': row[5], 'greeting': row[6]}
+            'core_prompt': row[5], 'greeting': row[6],
+            'canon_lock': row[7] or ''}
 
 
 def list_characters():

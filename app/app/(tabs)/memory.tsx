@@ -23,9 +23,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { C, SERVER_URL } from '../../constants/theme';
+import { C, SERVER_URL, FIXED_USER_ID } from '../../constants/theme';
 
-const FIXED_USER_ID = 'user_mofpiyd7442ia7';
 
 interface Character { id: string; name: string; avatar_url?: string | null; }
 interface FactMem   { id: number; content: string; category: string; timestamp?: string | null; }

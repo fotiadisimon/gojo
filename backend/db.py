@@ -22,6 +22,8 @@ def init_db():
         greeting TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
+    cur.execute("ALTER TABLE characters ADD COLUMN IF NOT EXISTS canon_lock TEXT DEFAULT ''")
+
     # ── 角色背景记忆表(替代 gojo_memory)──
     cur.execute('''CREATE TABLE IF NOT EXISTS character_memory (
         id SERIAL PRIMARY KEY,

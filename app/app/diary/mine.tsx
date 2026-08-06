@@ -12,9 +12,8 @@ import {
   ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context'; // ★ 底部三键 / 手势条适配
-import { SERVER_URL } from '../../constants/theme';
+import { SERVER_URL, FIXED_USER_ID } from '../../constants/theme';
 
-const FIXED_USER_ID = 'user_mofpiyd7442ia7';
 const HAND = 'LongCang';
 
 interface Visit { character_id: string; unlocked: boolean; visited_at: string | null; }

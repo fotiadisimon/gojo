@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Notifications from 'expo-notifications';
@@ -26,8 +26,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context'; // ★ 底部三键 / 手势条适配
 import PendingTransactionCard, { Account as AcctType } from '../../components/PendingTransactionCard'; // ★ 记账确认卡
-import VoiceCallModal from '../../components/VoiceCallModal';
-import { C, SERVER_URL, nowTime } from '../../constants/theme';
+import { C, SERVER_URL, nowTime, FIXED_USER_ID } from '../../constants/theme';
 import type { Message } from '../../types/message';
 
 Notifications.setNotificationHandler({
@@ -40,7 +39,7 @@ Notifications.setNotificationHandler({
 
 const { width } = Dimensions.get('window');
 
-const FIXED_USER_ID  = 'user_mofpiyd7442ia7';
+
 const MAX_AUDIO_ENTRIES = 30;
 const PROACTIVE_KEY  = 'gojo_proactive_state';
 const MSG_DELAY_MS   = 800;
@@ -1446,13 +1445,6 @@ export default function ChatRoom() {
         </TouchableOpacity>
       </View>
 
-      {showCall && (
-        <VoiceCallModal
-          userId={FIXED_USER_ID}
-          onClose={() => setShowCall(false)}
-          onAddMessages={(newMsgs: Message[]) => setMessages(prev => [...prev, ...newMsgs])}
-        />
-      )}
     </View>
   );
 }

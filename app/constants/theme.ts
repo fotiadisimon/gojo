@@ -37,19 +37,37 @@ export const WEEKDAYS = ['日','一','二','三','四','五','六'];
 export const MONTHS = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-const DEFAULT_SERVER_URL = 'https://gojosatoru.zeabur.app';
+export const DEFAULT_SERVER_URL = 'https://gojopub.zeabur.app';
 
 export let SERVER_URL = DEFAULT_SERVER_URL;
+
+// ★ 用户 ID：首次启动随机生成一次然后固化到本机
+export let FIXED_USER_ID = 'default';
 
 export const setServerUrl = async (url: string) => {
   SERVER_URL = url.replace(/\/+$/, '');
   try { await AsyncStorage.setItem('server_url', SERVER_URL); } catch {}
 };
 
-// 启动时读回上次保存的地址（异步，首屏极个别请求可能仍用默认值，无碍）
-AsyncStorage.getItem('server_url')
-  .then(v => { if (v) SERVER_URL = v; })
-  .catch(() => {});
+/** ★ App 启动时 await 调用一次，把存的配置恢复出来 */
+export async function loadAppConfig() {
+  try {
+    const [s, u] = await Promise.all([
+      AsyncStorage.getItem('server_url'),
+      AsyncStorage.getItem('user_id'),
+    ]);
+    if (s) SERVER_URL = s;
+    if (u) {
+      FIXED_USER_ID = u;
+    } else {
+      const newId = 'user_' + Math.random().toString(36).slice(2, 14);
+      await AsyncStorage.setItem('user_id', newId);
+      FIXED_USER_ID = newId;
+    }
+  } catch (e) {
+    console.warn('[theme] loadAppConfig failed', e);
+  }
+}
 
 export function uid() { return Math.random().toString(36).slice(2); }
 export function nowTime() {

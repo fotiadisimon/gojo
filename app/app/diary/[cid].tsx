@@ -12,9 +12,9 @@ import {
   ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context'; // ★ 底部三键 / 手势条适配
-import { SERVER_URL } from '../../constants/theme';
+import { SERVER_URL, FIXED_USER_ID } from '../../constants/theme';
 
-const FIXED_USER_ID = 'user_mofpiyd7442ia7';
+
 const HAND = 'LongCang';   // ★ 手写字体名,须与 assets/fonts/LongCang-Regular.ttf 对应
 
 interface DiaryComment { id: number; content: string; created_at: string | null; }

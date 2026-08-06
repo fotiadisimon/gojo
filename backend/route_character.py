@@ -65,7 +65,7 @@ async def create_character(data: dict):
 async def update_character(character_id: str, data: dict):
     """改角色的某些字段（最常用：换 voice_id）。只传要改的字段即可。"""
     fields, vals = [], []
-    for k in ['name', 'name_en', 'avatar_url', 'voice_id', 'core_prompt', 'greeting']:
+    for k in ['name', 'name_en', 'avatar_url', 'voice_id', 'core_prompt', 'greeting', 'canon_lock']:
         if k in data:
             fields.append(f'{k} = %s')
             vals.append(data[k])

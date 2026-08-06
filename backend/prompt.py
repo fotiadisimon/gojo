@@ -489,7 +489,7 @@ def _build_prompt_parts(user_id, character_id=DEFAULT_CHARACTER_ID, user_message
     accounts_text = _accounts_block(user_id)
 
     # ── ★ 角色专属铁律（公开版取消，人设全写在 core_prompt 里）──
-    canon_lock = ''
+    canon_lock = (char.get('canon_lock') or '') if char else ''
 
     # ── 时间 + 输出规范 ──
     time_ctx = get_time_context()
