@@ -1,7 +1,6 @@
-// 设置页 —— 这是把 App 打包给别人也能用的关键：
-//   1. 让用户填自己的后端 SERVER_URL
-//   2. 显示当前 provider / API key 状态
-//   3. 显示 USER_ID（长按可复制看看）
+// 设置页 —— 所有后端配置都在这里填：
+//   API Keys、Provider 切换、模型选择、TTS 配置
+//   改完点"保存到后端"，写入 DB settings 表，立刻生效不用重启
 import axios from 'axios';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
@@ -12,72 +11,123 @@ import {
 import { C, DEFAULT_SERVER_URL } from '../constants/theme';
 import { useServerConfig } from '../hooks/useServerConfig';
 
-interface Cfg {
-  provider: string;
-  claude_model: string;
-  deepseek_model: string;
-  character_name: string;
-  character_greeting: string;
-  has_claude_key: boolean;
-  has_deepseek_key: boolean;
-  emotions: string[];
-}
+// 要在页面上显示的配置项（按分组排列）
+const GROUPS = [
+  {
+    title: 'LLM 提供商',
+    fields: [
+      { key: 'LLM_PROVIDER', label: 'Provider', hint: 'claude 或 deepseek' },
+      { key: 'ANTHROPIC_API_KEY', label: 'Claude API Key', secret: true, hint: 'sk-ant-...' },
+      { key: 'CLAUDE_MODEL', label: 'Claude 模型', hint: '如 claude-sonnet-4-5-20250929' },
+      { key: 'DEEPSEEK_API_KEY', label: 'DeepSeek API Key', secret: true, hint: '' },
+      { key: 'DEEPSEEK_MODEL', label: 'DeepSeek 模型', hint: '如 deepseek-chat' },
+      { key: 'DEEPSEEK_BASE_URL', label: 'DeepSeek Base URL', hint: '' },
+    ],
+  },
+  {
+    title: 'Fish Audio TTS（语音）',
+    fields: [
+      { key: 'FISH_KEY', label: 'Fish Audio Key', secret: true, hint: '' },
+      { key: 'FISH_VOICE_ID', label: '默认 Voice ID', hint: 'Fish 的 reference_id' },
+    ],
+  },
+  {
+    title: '默认角色（初始种子）',
+    fields: [
+      { key: 'CHARACTER_NAME', label: '角色名', hint: '' },
+      { key: 'CHARACTER_GREETING', label: '开场白', hint: '' },
+      { key: 'CHARACTER_PROMPT', label: '人设 Prompt', multiline: true, hint: '可以写很长' },
+    ],
+  },
+];
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { serverUrl, userId, setServerUrl } = useServerConfig();
-  const [input, setInput] = useState(serverUrl);
-  const [cfg, setCfg] = useState<Cfg | null>(null);
+  const [urlInput, setUrlInput] = useState(serverUrl);
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [localEdits, setLocalEdits] = useState<Record<string, string>>({});
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState('');
 
-  useEffect(() => { setInput(serverUrl); }, [serverUrl]);
+  useEffect(() => { setUrlInput(serverUrl); }, [serverUrl]);
+
+  const loadSettings = async (url?: string) => {
+    const base = url || serverUrl;
+    setLoadingSettings(true);
+    try {
+      const r = await axios.get(`${base}/settings`, { timeout: 8000 });
+      setSettings(r.data || {});
+      setLocalEdits({});
+    } catch (e: any) {
+      console.warn('load settings', e?.message);
+      setSettings({});
+    } finally { setLoadingSettings(false); }
+  };
 
   useEffect(() => {
-    axios.get(`${serverUrl}/config`, { timeout: 5000 })
-      .then(r => setCfg(r.data))
-      .catch(() => setCfg(null));
+    loadSettings();
   }, [serverUrl]);
 
-  const testConnection = async (url: string) => {
-    setTesting(true);
-    setTestResult('');
+  const testConnection = async () => {
+    setTesting(true); setTestResult('');
+    const url = urlInput.trim().replace(/\/$/, '');
     try {
-      const r = await axios.get(`${url.replace(/\/$/, '')}/health`, { timeout: 6000 });
-      setTestResult(`✅ 连接正常（provider: ${r.data.provider}）`);
-      return true;
+      const r = await axios.get(`${url}/health`, { timeout: 6000 });
+      setTestResult(`✅ 连接正常 (${r.data?.provider || '?'})`);
     } catch (e: any) {
       setTestResult(`❌ ${e?.message || '连接失败'}`);
-      return false;
-    } finally {
-      setTesting(false);
-    }
+    } finally { setTesting(false); }
   };
 
   const saveUrl = async () => {
-    const v = input.trim();
-    if (!v) { Alert.alert('提示', '地址不能为空'); return; }
-    if (!/^https?:\/\//.test(v)) {
+    const v = urlInput.trim();
+    if (!v || !/^https?:\/\//.test(v)) {
       Alert.alert('提示', '地址必须以 http:// 或 https:// 开头');
       return;
     }
     await setServerUrl(v);
-    // 刷新一下 config
-    try {
-      const r = await axios.get(`${v.replace(/\/$/, '')}/config`, { timeout: 5000 });
-      setCfg(r.data);
-    } catch {}
+    await loadSettings(v);
     Alert.alert('已保存', '后端地址已更新');
   };
 
-  const resetDefault = () => {
+  const resetUrl = () => {
     Alert.alert('恢复默认', `恢复为 ${DEFAULT_SERVER_URL}？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
         await setServerUrl(DEFAULT_SERVER_URL);
-        setInput(DEFAULT_SERVER_URL);
+        setUrlInput(DEFAULT_SERVER_URL);
       }},
     ]);
+  };
+
+  const getVal = (key: string) => {
+    if (key in localEdits) return localEdits[key];
+    return settings[key] || '';
+  };
+
+  const setVal = (key: string, v: string) => {
+    setLocalEdits(prev => ({ ...prev, [key]: v }));
+  };
+
+  const hasChanges = Object.keys(localEdits).length > 0;
+
+  const saveSettings = async () => {
+    if (!hasChanges) { Alert.alert('提示', '没有修改'); return; }
+    setSaving(true);
+    try {
+      const r = await axios.put(`${serverUrl}/settings`, localEdits, { timeout: 10000 });
+      if (r.data?.ok) {
+        Alert.alert('✅ 已保存', `更新了 ${r.data.updated?.length || 0} 项，立刻生效`);
+        await loadSettings();
+      } else {
+        Alert.alert('失败', r.data?.error || '未知错误');
+      }
+    } catch (e: any) {
+      Alert.alert('保存失败', e?.response?.data?.error || e?.message);
+    } finally { setSaving(false); }
   };
 
   return (
@@ -85,65 +135,79 @@ export default function SettingsScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.content}>
 
-        {/* 后端地址配置 */}
+        {/* 后端地址 */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>后端地址</Text>
           <Text style={s.hint}>
-            如果在真机上跑，这里要填运行后端那台电脑的 IP，比如 http://192.168.1.100:8080
+            真机填电脑局域网 IP，如 http://192.168.1.100:8080
           </Text>
           <TextInput
-            style={s.input}
-            value={input}
-            onChangeText={setInput}
-            placeholder="http://your-server:8080"
-            placeholderTextColor={C.textMute}
-            autoCapitalize="none"
-            autoCorrect={false}
+            style={s.input} value={urlInput} onChangeText={setUrlInput}
+            placeholder="http://your-server:8080" placeholderTextColor={C.textMute}
+            autoCapitalize="none" autoCorrect={false}
           />
           <View style={s.btnRow}>
-            <TouchableOpacity style={s.testBtn} onPress={() => testConnection(input)}>
+            <TouchableOpacity style={s.testBtn} onPress={testConnection}>
               <Text style={s.testText}>{testing ? '测试中…' : '测试连接'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={s.saveBtn} onPress={saveUrl}>
-              <Text style={s.saveText}>保存</Text>
+            <TouchableOpacity style={s.saveUrlBtn} onPress={saveUrl}>
+              <Text style={s.saveUrlText}>保存地址</Text>
             </TouchableOpacity>
           </View>
           {testResult ? <Text style={s.testResult}>{testResult}</Text> : null}
-          <TouchableOpacity onPress={resetDefault}>
+          <TouchableOpacity onPress={resetUrl}>
             <Text style={s.resetText}>恢复默认 ({DEFAULT_SERVER_URL})</Text>
           </TouchableOpacity>
         </View>
 
-        {/* 当前后端状态 */}
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>当前后端</Text>
-          {!cfg ? (
-            <View style={{ paddingVertical: 12 }}>
-              <ActivityIndicator color={C.accent} />
-              <Text style={[s.hint, { textAlign: 'center', marginTop: 8 }]}>
-                连不上，请检查地址
-              </Text>
-            </View>
-          ) : (
-            <View>
-              <InfoRow label="角色" value={cfg.character_name} />
-              <InfoRow label="Provider" value={cfg.provider} />
-              <InfoRow label="Claude Model" value={cfg.claude_model} />
-              <InfoRow label="DeepSeek Model" value={cfg.deepseek_model} />
-              <InfoRow label="Claude Key"
-                value={cfg.has_claude_key ? '✓ 已配置' : '✗ 未设置'}
-                valueColor={cfg.has_claude_key ? C.income : C.expense}
-              />
-              <InfoRow label="DeepSeek Key"
-                value={cfg.has_deepseek_key ? '✓ 已配置' : '✗ 未设置'}
-                valueColor={cfg.has_deepseek_key ? C.income : C.expense}
-              />
-              <InfoRow label="情绪种类" value={`${cfg.emotions.length} 种`} />
-            </View>
-          )}
-        </View>
+        {/* 后端配置项 */}
+        {loadingSettings ? (
+          <View style={s.section}>
+            <ActivityIndicator color={C.accent} />
+            <Text style={[s.hint, { textAlign: 'center', marginTop: 10 }]}>
+              加载后端配置中…（连不上就只能改地址）
+            </Text>
+          </View>
+        ) : (
+          <>
+            {GROUPS.map(g => (
+              <View key={g.title} style={s.section}>
+                <Text style={s.sectionTitle}>{g.title}</Text>
+                {g.fields.map(f => (
+                  <View key={f.key} style={s.fieldWrap}>
+                    <Text style={s.fieldLabel}>{f.label}</Text>
+                    {f.hint ? <Text style={s.fieldHint}>{f.hint}</Text> : null}
+                    <TextInput
+                      style={[s.input, f.multiline && { minHeight: 100, textAlignVertical: 'top' }]}
+                      value={getVal(f.key)}
+                      onChangeText={v => setVal(f.key, v)}
+                      placeholder={f.hint || f.label}
+                      placeholderTextColor={C.textMute}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      secureTextEntry={false}
+                      multiline={f.multiline}
+                    />
+                    {f.secret && settings[f.key] && !(f.key in localEdits) && (
+                      <Text style={s.secretHint}>显示的是打码后的值，填新值覆盖即可</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ))}
 
-        {/* 用户 ID */}
+            <TouchableOpacity
+              style={[s.bigSaveBtn, !hasChanges && { opacity: 0.4 }]}
+              onPress={saveSettings} disabled={!hasChanges || saving}
+            >
+              <Text style={s.bigSaveText}>
+                {saving ? '保存中…' : hasChanges ? `保存到后端（${Object.keys(localEdits).length} 项）` : '没有修改'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* 身份 */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>身份</Text>
           <Text style={s.hint}>本机 ID（用于区分不同用户的数据）</Text>
@@ -153,21 +217,10 @@ export default function SettingsScreen() {
         </View>
 
         <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
-          <Text style={s.backText}>返回</Text>
+          <Text style={s.backText}>返回首页</Text>
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
-  );
-}
-
-function InfoRow({ label, value, valueColor }: {
-  label: string; value: string; valueColor?: string
-}) {
-  return (
-    <View style={s.infoRow}>
-      <Text style={s.infoLabel}>{label}</Text>
-      <Text style={[s.infoVal, valueColor && { color: valueColor }]}>{value || '-'}</Text>
-    </View>
   );
 }
 
@@ -178,41 +231,45 @@ const s = StyleSheet.create({
     borderRadius: 12, padding: 16, marginBottom: 16,
   },
   sectionTitle: { color: C.text, fontSize: 16, fontWeight: '700', marginBottom: 10 },
-  hint: { color: C.textDim, fontSize: 12, marginBottom: 10, lineHeight: 18 },
+  hint: { color: C.textDim, fontSize: 12, marginBottom: 8, lineHeight: 18 },
   input: {
     color: C.text, backgroundColor: C.card2,
     borderColor: C.border, borderWidth: 1, borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginBottom: 10,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginBottom: 4,
   },
-  btnRow: { flexDirection: 'row' },
+  btnRow: { flexDirection: 'row', marginTop: 8 },
   testBtn: {
     flex: 1, borderColor: C.accent, borderWidth: 1, borderRadius: 8,
     paddingVertical: 10, alignItems: 'center', marginRight: 8,
   },
   testText: { color: C.accent2, fontSize: 14, fontWeight: '600' },
-  saveBtn: {
+  saveUrlBtn: {
     flex: 1, backgroundColor: C.accent, borderRadius: 8,
     paddingVertical: 10, alignItems: 'center',
   },
-  saveText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  testResult: { color: C.textDim, fontSize: 12, marginTop: 10 },
+  saveUrlText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  testResult: { color: C.textDim, fontSize: 12, marginTop: 8 },
   resetText: {
     color: C.textMute, fontSize: 12, textAlign: 'center', marginTop: 12,
     textDecorationLine: 'underline',
   },
-  infoRow: {
-    flexDirection: 'row', paddingVertical: 6,
-    borderBottomColor: C.border, borderBottomWidth: 1,
+  fieldWrap: { marginBottom: 14 },
+  fieldLabel: { color: C.text, fontSize: 13, fontWeight: '600', marginBottom: 4 },
+  fieldHint: { color: C.textMute, fontSize: 11, marginBottom: 4 },
+  secretHint: { color: C.textMute, fontSize: 10, fontStyle: 'italic', marginTop: 2 },
+  bigSaveBtn: {
+    backgroundColor: C.accent, borderRadius: 24,
+    paddingVertical: 16, alignItems: 'center', marginBottom: 16,
   },
-  infoLabel: { color: C.textDim, fontSize: 13, width: 120 },
-  infoVal: { color: C.text, fontSize: 13, flex: 1, fontWeight: '600' },
+  bigSaveText: { color: '#fff', fontSize: 17, fontWeight: '800' },
   uidBox: {
     backgroundColor: C.card2, borderColor: C.border, borderWidth: 1,
     borderRadius: 8, padding: 12,
   },
-  uidText: { color: C.accent2, fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
-  backBtn: {
-    paddingVertical: 14, alignItems: 'center', marginTop: 10,
+  uidText: {
+    color: C.accent2, fontSize: 13,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
+  backBtn: { paddingVertical: 14, alignItems: 'center', marginTop: 10 },
   backText: { color: C.textDim, fontSize: 14 },
 });

@@ -16,6 +16,7 @@ from .route_character import router as character_router
 from .route_chat import router as chat_router
 from .route_diary import router as diary_router
 from .route_image import router as image_router
+from .route_settings import router as settings_router
 from .route_tasks import router as tasks_router
 from .route_tts import router as tts_router
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(character_router)
     app.include_router(chat_router)
     app.include_router(image_router)
+    app.include_router(settings_router)
     app.include_router(tts_router)
     app.include_router(diary_router)
     app.include_router(tasks_router)
@@ -44,7 +46,7 @@ def create_app() -> FastAPI:
 
     @app.get('/health')
     async def health():
-        return {'status': 'ok', 'provider': cfg.LLM_PROVIDER}
+        return {'status': 'ok', 'provider': cfg.get('LLM_PROVIDER')}
 
     @app.get('/config')
     async def public_config():
@@ -58,14 +60,14 @@ app = create_app()
 
 
 def main():
-    provider = cfg.LLM_PROVIDER
-    has_key = cfg.ANTHROPIC_API_KEY if provider == 'claude' else cfg.DEEPSEEK_API_KEY
-    model = cfg.CLAUDE_MODEL if provider == 'claude' else cfg.DEEPSEEK_MODEL
+    provider = cfg.get('LLM_PROVIDER')
+    has_key = cfg.get('ANTHROPIC_API_KEY') if provider == 'claude' else cfg.get('DEEPSEEK_API_KEY')
+    model = cfg.get('CLAUDE_MODEL') if provider == 'claude' else cfg.get('DEEPSEEK_MODEL')
 
     print('=' * 60)
     print(f'  GojoAssistant Simple 启动中')
     print(f'  Provider: {provider}   Model: {model}')
-    print(f'  Character: {cfg.CHARACTER_NAME}')
+    print(f'  Character: {cfg.get('CHARACTER_NAME')}')
     if not has_key:
         print(f'  ⚠️  {provider.upper()}_API_KEY 未设置——聊天功能会返回错误')
         print(f'      请在 .env 或 config.json 里填 API key')

@@ -24,17 +24,17 @@ def _resolve(char_id):
     default = get_character('default')
     if default:
         return default['id'], default['core_prompt']
-    return 'default', cfg.CHARACTER_PROMPT
+    return 'default', cfg.get('CHARACTER_PROMPT')
 
 
 @router.post('/chat/image')
 async def chat_image(data: dict):
-    if cfg.LLM_PROVIDER != 'claude':
+    if cfg.get('LLM_PROVIDER') != 'claude':
         return JSONResponse(
-            {'error': f'图片聊天目前只支持 Claude；当前 provider 是 {cfg.LLM_PROVIDER}'},
+            {'error': f'图片聊天目前只支持 Claude；当前 provider 是 {cfg.get('LLM_PROVIDER')}'},
             status_code=400,
         )
-    if not cfg.ANTHROPIC_API_KEY:
+    if not cfg.get('ANTHROPIC_API_KEY'):
         return JSONResponse({'error': 'ANTHROPIC_API_KEY 未设置'}, status_code=500)
 
     user_id = safe_str(data.get('user_id'), 'default')
@@ -76,12 +76,12 @@ async def chat_image(data: dict):
     except ImportError:
         return JSONResponse({'error': 'anthropic 未安装'}, status_code=500)
 
-    client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=cfg.get('ANTHROPIC_API_KEY'))
     system_prompt = build_system_prompt(core_prompt, user_text or '[用户发了一张图片]')
 
     try:
         resp = client.messages.create(
-            model=cfg.CLAUDE_MODEL,
+            model=cfg.get('CLAUDE_MODEL'),
             max_tokens=1500,
             temperature=0.8,
             system=system_prompt,

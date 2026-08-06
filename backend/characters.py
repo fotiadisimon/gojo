@@ -20,10 +20,10 @@ def seed_default_if_empty():
             conn.execute(
                 '''INSERT INTO characters (id, name, core_prompt, greeting, voice_id, avatar_emoji)
                    VALUES (?, ?, ?, ?, ?, ?)''',
-                (DEFAULT_ID, cfg.CHARACTER_NAME, cfg.CHARACTER_PROMPT,
-                 cfg.CHARACTER_GREETING, cfg.FISH_VOICE_ID, '🤖'),
+                (DEFAULT_ID, cfg.get('CHARACTER_NAME'), cfg.get('CHARACTER_PROMPT'),
+                 cfg.get('CHARACTER_GREETING'), cfg.get('FISH_VOICE_ID'), '🤖'),
             )
-            print(f'[characters] 已种默认角色 id={DEFAULT_ID} name={cfg.CHARACTER_NAME}')
+            print(f'[characters] 已种默认角色 id={DEFAULT_ID} name={cfg.get('CHARACTER_NAME')}')
 
 
 def list_characters():

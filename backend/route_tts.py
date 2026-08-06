@@ -26,7 +26,7 @@ async def tts(data: dict):
     if emotion not in cfg.EMOTIONS:
         emotion = '平静'
 
-    if not cfg.FISH_KEY:
+    if not cfg.get('FISH_KEY'):
         return JSONResponse(
             {'error': 'FISH_KEY 未配置，无法合成语音'},
             status_code=503,

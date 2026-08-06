@@ -1,20 +1,16 @@
-"""Fish Audio TTS —— 沿用完整版的稳定参数
-
-只做 TTS，不做 STT（公开版把语音转文字砍了）。
-"""
+"""Fish Audio TTS —— 沿用完整版的稳定参数"""
 import base64
 import requests
 
 from . import config as cfg
 
-# 沿用原版稳定参数（原注释：温度越低越贴克隆源）
 TTS_TEMPERATURE = 0.4
 TTS_TOP_P = 0.7
 
 
 def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
-    """调 Fish Audio API 合成语音，返回 mp3 bytes。"""
-    if not cfg.FISH_KEY:
+    fish_key = cfg.get('FISH_KEY')
+    if not fish_key:
         raise RuntimeError('FISH_KEY 未配置')
 
     tag = cfg.EMOTION_TAGS.get(emotion, '')
@@ -29,14 +25,14 @@ def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
     else:
         chunk_length = 200
 
-    actual_voice_id = voice_id or cfg.FISH_VOICE_ID
+    actual_voice_id = voice_id or cfg.get('FISH_VOICE_ID')
     if not actual_voice_id:
-        raise RuntimeError('voice_id 缺失（角色未设置 voice_id，也没有默认 FISH_VOICE_ID）')
+        raise RuntimeError('voice_id 缺失')
 
     resp = requests.post(
         'https://api.fish.audio/v1/tts',
         headers={
-            'Authorization': f'Bearer {cfg.FISH_KEY}',
+            'Authorization': f'Bearer {fish_key}',
             'Content-Type': 'application/json',
         },
         json={
@@ -59,7 +55,6 @@ def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
 
 
 def tts_to_b64(text: str, emotion: str = '平静', voice_id: str = None) -> str:
-    """失败时返回空串，不抛异常（前端根据空串判断跳过播放）。"""
     try:
         audio = fish_tts(text, emotion, voice_id)
         return base64.b64encode(audio).decode()

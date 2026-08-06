@@ -57,7 +57,7 @@ def _resolve_character(character_id: str):
         return default['id'], default['core_prompt']
 
     # DB 里都没有 —— 用 config 里的兜底
-    return 'default', cfg.CHARACTER_PROMPT
+    return 'default', cfg.get('CHARACTER_PROMPT')
 
 
 @router.post('/chat/text')
@@ -100,7 +100,7 @@ async def chat_text(data: dict):
         'emotion': emotion,
         'content': content,
         'character_id': char_id,
-        'provider': cfg.LLM_PROVIDER,
+        'provider': cfg.get('LLM_PROVIDER'),
     })
 
 

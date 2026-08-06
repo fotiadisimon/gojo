@@ -36,7 +36,7 @@ def build_system_prompt(core_prompt: str = None, user_message: str = '') -> str:
       2) 时间上下文
       3) 情绪分析 + JSON 输出格式（与原版一致的 11 种情绪）
     """
-    character_prompt = core_prompt if core_prompt else cfg.CHARACTER_PROMPT
+    character_prompt = core_prompt if core_prompt else cfg.get('CHARACTER_PROMPT')
     time_ctx = get_time_context()
     emotion_list = ', '.join(cfg.EMOTIONS)
 
