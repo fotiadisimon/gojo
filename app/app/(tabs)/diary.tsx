@@ -8,6 +8,7 @@ import {
   Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput,
   TouchableOpacity, View
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, DIARY_MOODS, todayStr } from '../../constants/theme';
 import { useServerConfig } from '../../hooks/useServerConfig';
 
@@ -21,6 +22,7 @@ interface Entry {
 }
 
 export default function DiaryScreen() {
+  const insets = useSafeAreaInsets();
   const { serverUrl, userId, loading: cfgLoading } = useServerConfig();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,8 +184,7 @@ export default function DiaryScreen() {
 
 const s = StyleSheet.create({
   center: { flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' },
-  header: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 12 },
-  title: { color: C.text, fontSize: 26, fontWeight: '800' },
+header: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 8 },  title: { color: C.text, fontSize: 26, fontWeight: '800' },
   list: { padding: 16, paddingBottom: 100 },
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyIcon: { fontSize: 48, marginBottom: 12 },

@@ -10,12 +10,6 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="chat" options={{ headerShown: false }} />
-          <Stack.Screen name="settings" options={{
-            headerShown: true,
-            title: '设置',
-            headerStyle: { backgroundColor: '#0d1a2e' },
-            headerTintColor: '#e8f4ff',
-          }} />
         </Stack>
         <StatusBar style="light" />
       </SafeAreaProvider>

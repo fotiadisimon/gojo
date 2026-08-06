@@ -1,14 +1,10 @@
 """工具函数"""
 import json
+import re
 
 
 def extract_json(raw: str):
-    """从模型回复里抠出 JSON。原版逻辑基础上，加上"抓第一个 { 到最后一个 }"兜底。"""
-    if not raw:
-        return None
     raw = raw.strip()
-
-    # 处理 markdown 代码块
     if '```' in raw:
         parts = raw.split('```')
         for p in parts:
@@ -18,26 +14,42 @@ def extract_json(raw: str):
             if p.startswith('{'):
                 raw = p
                 break
-
-    # 直接尝试
+    raw = raw.replace('\n', ' ').replace('\r', '')
     try:
         return json.loads(raw)
-    except Exception:
+    except:
         pass
-
-    # 兜底：从第一个 { 到最后一个 }
-    try:
-        i = raw.find('{')
-        j = raw.rfind('}')
-        if i != -1 and j > i:
-            return json.loads(raw[i:j + 1])
-    except Exception:
-        pass
-
     return None
 
 
-def safe_str(v, default=''):
-    if v is None:
-        return default
-    return str(v).strip()
+def sanitize_jp(jp: str) -> str:
+    jp = jp.replace('ふふ', 'へへ')
+    jp = re.sub(r'あはは+', 'ふっ', jp)
+    jp = re.sub(r'ハハハ+', 'はは', jp)
+    jp = re.sub(r'〜+(?=[。!?、\s]|$)', '', jp)
+    jp = re.sub(r'…+〜+', '…', jp)
+    if jp and jp[-1] not in '。!?…':
+        jp = jp + '。'
+    return jp
+
+
+def merge_only_extreme_short(msgs):
+    if len(msgs) <= 1:
+        return msgs
+    result = []
+    i = 0
+    while i < len(msgs):
+        cur = msgs[i]
+        if len(cur.get('jp', '')) < 6 and i + 1 < len(msgs):
+            nxt = msgs[i + 1]
+            merged = {
+                'jp': cur['jp'].rstrip('。') + '。' + nxt['jp'],
+                'zh': cur['zh'] + nxt['zh'],
+                'audio_b64': ''
+            }
+            result.append(merged)
+            i += 2
+        else:
+            result.append(cur)
+            i += 1
+    return result
