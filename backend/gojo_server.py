@@ -28,6 +28,10 @@ from route_tasks import router as tasks_router
 from route_tts import router as tts_router
 from route_proactive import router as proactive_router
 from route_settings import router as settings_router
+from db_diary import init_diary_tables
+from db_promise import init_promise_table
+from proactive_msg import init_proactive_table
+from push_notify import init_push_table
 
 app = FastAPI(title='GojoAssistant Simple')
 
@@ -42,6 +46,10 @@ app.add_middleware(
 @app.on_event('startup')
 async def startup():
     init_db()
+    init_diary_tables()
+    init_promise_table()
+    init_proactive_table()
+    init_push_table()
     init_period_table()
     seed_all_characters()
 

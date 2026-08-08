@@ -29,6 +29,17 @@ def init_db():
         value TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
+    # ★ 羁绊记忆：她和某角色之间的事（between）/ 她告诉角色的事（told）
+    cur.execute('''CREATE TABLE IF NOT EXISTS bond_memory (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'between',
+        content TEXT NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS idx_bond_mem
+                   ON bond_memory (user_id, character_id, kind, timestamp DESC)''')
+
     # ── 角色背景记忆表(替代 gojo_memory)──
     cur.execute('''CREATE TABLE IF NOT EXISTS character_memory (
         id SERIAL PRIMARY KEY,
