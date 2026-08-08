@@ -268,7 +268,9 @@ async def chat_text(data: dict):
                     result = parsed
                     break
         except Exception as e:
-            print(f'attempt {attempt+1} error: {e}')
+            import traceback
+            print(f'attempt {attempt+1} error: {type(e).__name__}: {e}')
+            traceback.print_exc()
 
     # ★ 纯日语救援：模型说了日语但没包成 JSON（解析全失败）时，
     #   与其甩一句"没听清"，不如把他真正说的话用上——比兜底自然得多。
