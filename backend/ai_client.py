@@ -1,14 +1,14 @@
 """统一 LLM 客户端 adapter —— 让代码不用管走 Anthropic 还是 DeepSeek
 
-设计原则:
-- 主体角色扮演(chat/voice/story)—— 走 Anthropic,直接用它 SDK,保留 prompt cache
-- 中文辅助任务(记忆提取/日记/记账短评)—— 通过这里,可以走 DeepSeek 省钱
+★ v2：所有配置改为运行时读 config.get_setting()，
+  这样在 App 设置页里改 key / base_url / 模型，下一次调用立刻生效，
+  不用重启服务、不用动 Zeabur 环境变量。
 
 用法:
     from ai_client import create_chat
-    from config import MODEL_CN_AUX
+    import config
     text, usage = create_chat(
-        model=MODEL_CN_AUX,
+        model=config.get_setting('MODEL_CN_AUX'),
         messages=[{'role': 'user', 'content': '...'}],
         max_tokens=400,
     )
@@ -20,16 +20,18 @@
 import json
 import requests
 import anthropic
-from config import ANTHROPIC_KEY, DEEPSEEK_KEY, DEEPSEEK_BASE_URL
+import config
 
-_anthropic_client = None
+DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com'
 
 
-def _get_anthropic():
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    return _anthropic_client
+def _clean(key: str, fallback: str = '') -> str:
+    """取配置并去空白；空值回退到 fallback。
+    ★ 必须有这层——settings 表里可能存了空串，直接用会让 httpx 报
+      'Request URL is missing an http:// or https:// protocol'。"""
+    v = config.get_setting(key)
+    v = (v or '').strip()
+    return v or fallback
 
 
 def create_chat(model, messages, system=None, max_tokens=1000, temperature=None):
@@ -48,6 +50,13 @@ def create_chat(model, messages, system=None, max_tokens=1000, temperature=None)
     Raises:
         RuntimeError: provider 报错时抛出
     """
+    model = (model or '').strip()
+    if not model:
+        # 没传模型名时按当前 provider 猜一个合理默认
+        provider = _clean('LLM_PROVIDER', 'claude').lower()
+        model = ('deepseek-chat' if provider == 'deepseek'
+                 else _clean('MODEL_JP_AUX', 'claude-haiku-4-5-20251001'))
+
     if model.startswith('claude-') or model.startswith('anthropic-'):
         return _call_anthropic(model, messages, system, max_tokens, temperature)
     elif model.startswith('deepseek-'):
@@ -57,7 +66,10 @@ def create_chat(model, messages, system=None, max_tokens=1000, temperature=None)
 
 
 def _call_anthropic(model, messages, system, max_tokens, temperature):
-    client = _get_anthropic()
+    api_key = _clean('ANTHROPIC_KEY')
+    if not api_key:
+        raise RuntimeError('ANTHROPIC_KEY 未配置,无法调用 Claude')
+    client = anthropic.Anthropic(api_key=api_key)
     kwargs = {
         'model': model,
         'max_tokens': max_tokens,
@@ -77,8 +89,14 @@ def _call_anthropic(model, messages, system, max_tokens, temperature):
 
 
 def _call_deepseek(model, messages, system, max_tokens, temperature):
-    if not DEEPSEEK_KEY:
+    api_key = _clean('DEEPSEEK_KEY')
+    if not api_key:
         raise RuntimeError('DEEPSEEK_KEY 未配置,无法调用 DeepSeek')
+
+    # ★ base_url 必须带协议
+    base_url = _clean('DEEPSEEK_BASE_URL', DEFAULT_DEEPSEEK_BASE)
+    if not base_url.startswith('http'):
+        base_url = DEFAULT_DEEPSEEK_BASE
 
     payload_messages = []
     if system:
@@ -95,9 +113,9 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
 
     try:
         resp = requests.post(
-            f'{DEEPSEEK_BASE_URL.rstrip("/")}/chat/completions',
+            f'{base_url.rstrip("/")}/chat/completions',
             headers={
-                'Authorization': f'Bearer {DEEPSEEK_KEY}',
+                'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json',
             },
             json=payload,
@@ -117,7 +135,6 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
 
         # ★ 推理模型(deepseek-v4-flash 等)会先吐一大段 reasoning_content,
         #   思考把 max_tokens 吃光后 content 就空了 / 被截断。
-        #   这里显式暴露出来,不然日志里只看到"模型什么都没输出"完全没头绪。
         reasoning = msg.get('reasoning_content') or ''
         if reasoning and not text.strip():
             print(f'[ai_client] ⚠️ {model} 的 token 全被思考吃掉了'

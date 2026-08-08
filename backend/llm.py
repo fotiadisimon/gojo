@@ -5,28 +5,37 @@
 """
 import config
 
+DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com'
+
 
 class LLMError(Exception):
     pass
 
 
+def _clean(key: str, fallback: str = '') -> str:
+    """取配置并去空白；空值回退到 fallback。"""
+    v = config.get_setting(key)
+    v = (v or '').strip()
+    return v or fallback
+
+
 def call_llm(system_prompt: str, messages: list, max_tokens: int = 1500,
              temperature: float = 0.8, prefer_fast: bool = False) -> str:
     """prefer_fast=True 用便宜的小模型（记忆提取、日记生成等后台任务）"""
-    provider = (config.get_setting('LLM_PROVIDER') or 'claude').lower()
+    provider = _clean('LLM_PROVIDER', 'claude').lower()
     if provider == 'deepseek':
         return _deepseek(system_prompt, messages, max_tokens, temperature)
     return _claude(system_prompt, messages, max_tokens, temperature, prefer_fast)
 
 
 def _claude(system_prompt, messages, max_tokens, temperature, prefer_fast=False):
-    api_key = config.get_setting('ANTHROPIC_KEY')
+    api_key = _clean('ANTHROPIC_KEY')
     if not api_key:
         raise LLMError('ANTHROPIC_KEY 未设置')
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
-    model = (config.get_setting('MODEL_JP_AUX') if prefer_fast
-             else config.get_setting('MODEL_MAIN'))
+    model = (_clean('MODEL_JP_AUX', 'claude-haiku-4-5-20251001') if prefer_fast
+             else _clean('MODEL_MAIN', 'claude-sonnet-4-5-20250929'))
     try:
         resp = client.messages.create(
             model=model, max_tokens=max_tokens, temperature=temperature,
@@ -38,16 +47,21 @@ def _claude(system_prompt, messages, max_tokens, temperature, prefer_fast=False)
 
 
 def _deepseek(system_prompt, messages, max_tokens, temperature):
-    api_key = config.get_setting('DEEPSEEK_KEY')
+    api_key = _clean('DEEPSEEK_KEY')
     if not api_key:
         raise LLMError('DEEPSEEK_KEY 未设置')
+
+    # ★ base_url 必须带协议，否则 httpx 直接报 UnsupportedProtocol
+    base_url = _clean('DEEPSEEK_BASE_URL', DEFAULT_DEEPSEEK_BASE)
+    if not base_url.startswith('http'):
+        base_url = DEFAULT_DEEPSEEK_BASE
+
     from openai import OpenAI
-    base_url = config.get_setting('DEEPSEEK_BASE_URL') or 'https://api.deepseek.com'
     client = OpenAI(api_key=api_key, base_url=base_url)
     full = [{'role': 'system', 'content': system_prompt}] + messages
     try:
         resp = client.chat.completions.create(
-            model=config.get_setting('DEEPSEEK_MODEL') or 'deepseek-chat',
+            model=_clean('DEEPSEEK_MODEL', 'deepseek-chat'),
             max_tokens=max_tokens, temperature=temperature, messages=full,
         )
         return resp.choices[0].message.content or ''
@@ -57,4 +71,4 @@ def _deepseek(system_prompt, messages, max_tokens, temperature):
 
 def supports_vision() -> bool:
     """图片聊天只有 Claude 支持"""
-    return (config.get_setting('LLM_PROVIDER') or 'claude').lower() == 'claude'
+    return _clean('LLM_PROVIDER', 'claude').lower() == 'claude'
