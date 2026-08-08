@@ -33,6 +33,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="chat" />
           <Stack.Screen name="diary" />
+          <Stack.Screen name="character" />
         </Stack>
         <StatusBar style="light" />
       </SafeAreaProvider>

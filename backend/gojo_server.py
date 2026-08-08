@@ -27,6 +27,7 @@ from route_stats import router as stats_router
 from route_tasks import router as tasks_router
 from route_tts import router as tts_router
 from route_proactive import router as proactive_router
+from route_settings import router as settings_router
 
 app = FastAPI(title='GojoAssistant Simple')
 
@@ -93,7 +94,7 @@ app.include_router(period_router)
 app.include_router(proactive_router)
 app.include_router(stats_router)
 app.include_router(config_router)
-
+app.include_router(settings_router)
 
 @app.get('/health')
 async def health():

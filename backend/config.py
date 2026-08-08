@@ -60,3 +60,58 @@ LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'claude').lower()
 # 兼容 llm.py 的命名
 MODEL_AUX = MODEL_JP_AUX
 DEEPSEEK_MODEL = os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')
+
+# ══════════════════════════════════════════════
+#  运行时配置：DB settings 表 > 环境变量 > 默认值
+#  App 设置页改完立刻生效，不用重启
+# ══════════════════════════════════════════════
+
+# 静态默认值（上面那些常量的快照）
+_STATIC = {
+    'LLM_PROVIDER':      LLM_PROVIDER,
+    'ANTHROPIC_KEY':     ANTHROPIC_KEY,
+    'MODEL_MAIN':        MODEL_MAIN,
+    'MODEL_JP_AUX':      MODEL_JP_AUX,
+    'MODEL_CN_AUX':      MODEL_CN_AUX,
+    'DEEPSEEK_KEY':      DEEPSEEK_KEY,
+    'DEEPSEEK_MODEL':    DEEPSEEK_MODEL,
+    'DEEPSEEK_BASE_URL': DEEPSEEK_BASE_URL,
+    'FISH_KEY':          FISH_KEY,
+    'FISH_VOICE_ID':     FISH_VOICE_ID,
+}
+
+_cache = None
+
+
+def clear_settings_cache():
+    """settings 改动后调用，下次 get_setting 会重新查 DB"""
+    global _cache
+    _cache = None
+
+
+def _load_from_db():
+    global _cache
+    if _cache is not None:
+        return _cache
+    _cache = {}
+    try:
+        from db import get_conn
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('SELECT key, value FROM settings')
+        for k, v in cur.fetchall():
+            if v:
+                _cache[k] = v
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f'[config] 读 settings 表失败（用静态值）：{e}')
+    return _cache
+
+
+def get_setting(key: str) -> str:
+    """★ 业务代码统一用这个取配置，不要直接用模块级常量"""
+    db = _load_from_db()
+    if key in db and db[key]:
+        return db[key]
+    return _STATIC.get(key, '')
