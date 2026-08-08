@@ -67,10 +67,11 @@ def _create_json(model, max_tokens, system_blocks, messages):
         api_key = config.get_setting('DEEPSEEK_KEY')
         if not api_key:
             raise RuntimeError('DEEPSEEK_KEY 未设置')
-        client = OpenAI(
-            api_key=api_key,
-            base_url=config.get_setting('DEEPSEEK_BASE_URL') or 'https://api.deepseek.com',
-        )
+        # ★ base_url 兜底：DB settings 里可能存了空串/空白，必须回退到默认
+        base_url = (config.get_setting('DEEPSEEK_BASE_URL') or '').strip()
+        if not base_url.startswith('http'):
+            base_url = 'https://api.deepseek.com'
+        client = OpenAI(api_key=api_key, base_url=base_url)
         # 多模态 content 降级成纯文本（DeepSeek 不支持图片输入）
         ds_msgs = []
         for m in messages:
@@ -82,7 +83,7 @@ def _create_json(model, max_tokens, system_blocks, messages):
             ds_msgs.append({'role': m['role'], 'content': c})
 
         resp = client.chat.completions.create(
-            model=config.get_setting('DEEPSEEK_MODEL') or 'deepseek-chat',
+            model=(config.get_setting('DEEPSEEK_MODEL') or '').strip() or 'deepseek-chat',
             max_tokens=max_tokens,
             messages=[{'role': 'system', 'content': sys_text}] + ds_msgs,
         )

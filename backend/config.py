@@ -112,6 +112,7 @@ def _load_from_db():
 def get_setting(key: str) -> str:
     """★ 业务代码统一用这个取配置，不要直接用模块级常量"""
     db = _load_from_db()
-    if key in db and db[key]:
-        return db[key]
+    v = db.get(key)
+    if v and str(v).strip():          # 空串/纯空白都当没设置，回退静态值
+        return str(v).strip()
     return _STATIC.get(key, '')
