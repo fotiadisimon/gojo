@@ -14,8 +14,9 @@
     )
 
 按 model 前缀分发:
-- 'claude-*' → Anthropic
-- 'deepseek-*' → DeepSeek(OpenAI 兼容 API)
+- 'claude-*' / 'anthropic-*' → Anthropic 原生 SDK
+- 其他（deepseek-* / gemini-* / gemma-* …）→ OpenAI 兼容接口，
+  具体连哪家由 DEEPSEEK_BASE_URL 决定
 """
 import json
 import requests
@@ -59,10 +60,9 @@ def create_chat(model, messages, system=None, max_tokens=1000, temperature=None)
 
     if model.startswith('claude-') or model.startswith('anthropic-'):
         return _call_anthropic(model, messages, system, max_tokens, temperature)
-    elif model.startswith('deepseek-'):
-        return _call_deepseek(model, messages, system, max_tokens, temperature)
-    else:
-        raise ValueError(f'未知的 model 前缀: {model}')
+    # ★ deepseek / gemini / gemma / 其他 OpenAI 兼容接口都走同一条路
+    #   （Gemini 提供 OpenAI 兼容层，base_url 指过去就能用）
+    return _call_deepseek(model, messages, system, max_tokens, temperature)
 
 
 def _call_anthropic(model, messages, system, max_tokens, temperature):
