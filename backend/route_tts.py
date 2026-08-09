@@ -1,4 +1,4 @@
-"""route_tts.py —— 语音重合成（老消息重播兜底）+ RAG 维护端点
+"""route_tts.py —— TTS 重合成 + RAG 状态
 
 /tts/resynth：前端点"重播"时，如果本机没有这条消息的音频文件（太老、被清理过、
               或当时 TTS 撞了 429 没生成），就调这里现场重新合成一次。
@@ -11,6 +11,7 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+import config
 from characters import get_character
 from tts import tts_to_b64
 import memory_search
@@ -32,13 +33,22 @@ async def resynth(data: dict):
     if not char:
         return JSONResponse({'error': f'character {character_id} not found'}, status_code=404)
 
-    voice_id = char.get('voice_id')
+    # ★ 角色没单独配音色时，回退到设置页里的全局默认 FISH_VOICE_ID
+    voice_id = (char.get('voice_id') or '').strip()
     if not voice_id:
-        return JSONResponse({'error': '该角色还没配置音色'}, status_code=400)
+        voice_id = (config.get_setting('FISH_VOICE_ID') or '').strip()
+    if not voice_id:
+        return JSONResponse(
+            {'error': '该角色没配音色，全局默认 Voice ID 也没设置'},
+            status_code=400,
+        )
+
+    if not (config.get_setting('FISH_KEY') or '').strip():
+        return JSONResponse({'error': 'FISH_KEY 未配置'}, status_code=503)
 
     audio = tts_to_b64(text, emotion, voice_id)
     if not audio:
-        # TTS 失败（并发超限/额度问题）——前端提示稍后再试即可
+        # TTS 失败（并发超限/额度问题/key 无效）——前端提示稍后再试即可
         return JSONResponse({'error': 'tts_failed', 'audio_b64': ''}, status_code=503)
 
     print(f'[resynth] {character_id} | {text[:24]}')

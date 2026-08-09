@@ -16,6 +16,7 @@
     },
     "android": {
       "package": "com.example.gojosimple",
+      "softwareKeyboardLayoutMode": "pan",
       "adaptiveIcon": {
         "backgroundColor": "#070d1a"
       }
@@ -31,9 +32,7 @@
           "photosPermission": "允许 App 访问相册以选择要发送给 AI 的图片",
           "cameraPermission": "允许 App 使用相机以拍照发送给 AI"
         }
-      ],
-      "expo-font",
-      "@react-native-community/datetimepicker"
+      ]
     ],
     "scheme": "gojosimple"
   }

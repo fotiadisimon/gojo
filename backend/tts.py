@@ -1,5 +1,10 @@
 # tts.py
-"""TTS 合成 + STT 转录（含繁转简）"""
+"""TTS 合成 + STT 转录（含繁转简）
+
+★ v2：FISH_KEY / FISH_VOICE_ID / GROQ_KEY 改成运行时读 config.get_setting()，
+  这样在 App 设置页里填的 key 立刻生效（原来是模块级静态导入，
+  只认 Zeabur 环境变量，设置页填了也没用）。
+"""
 import os
 import json
 import base64
@@ -8,7 +13,15 @@ import threading
 import requests
 import tempfile
 
-from config import FISH_KEY, FISH_VOICE_ID, GROQ_KEY, EMOTION_TAGS
+import config
+from config import EMOTION_TAGS
+
+
+def _cfg(key: str, fallback: str = '') -> str:
+    """取配置并去空白；空值回退到 fallback。"""
+    v = config.get_setting(key)
+    v = (v or '').strip()
+    return v or fallback
 
 
 # ═══════════════════════════════════════
@@ -29,7 +42,7 @@ def traditional_to_simplified(text: str) -> str:
             '問': '问', '時': '时', '書': '书', '開': '开', '關': '关',
             '還': '还', '對': '对', '從': '从', '個': '个', '們': '们',
             '愛': '爱', '來': '来', '認': '认', '識': '识', '記': '记',
-            '覺得': '觉得', '應該': '应该', '覺得': '觉得', '為什麼': '为什么',
+            '覺得': '觉得', '應該': '应该', '為什麼': '为什么',
             '什麼': '什么', '喜歡': '喜欢', '想要': '想要', '不知道': '不知道',
             '沒關係': '没关系', '沒事': '没事', '對不起': '对不起', '謝謝': '谢谢',
             '難道': '难道', '總是': '总是', '一直': '一直', '真的': '真的',
@@ -56,10 +69,8 @@ TTS_TOP_P       = 0.7
 #   - s1:v2 主力,质量好
 #   - s1-mini:s1 的低成本版
 #   - s2.1-pro / speech-2.1-pro:新的 pro 档
-#
-#   ★ 如果你的账号支持的 model ID 是"s2.1-pro"/"speech-2.1-pro"或者别的写法,
-#     去 Fish Audio 后台 Playground 里看下具体字符串,替换到这里。
-FISH_MODEL = 's2 Pro'
+#   可以用环境变量 FISH_MODEL 覆盖
+FISH_MODEL = os.environ.get('FISH_MODEL', 's2 Pro')
 
 
 # ★ 情绪 → 语速 + 音量映射
@@ -69,7 +80,6 @@ FISH_MODEL = 's2 Pro'
 #
 #   ★ v2 修正:愤怒/激动之类高唤醒情绪必须【快+响】,不是【慢+响】——
 #     慢+响在人耳里是"严肃/凝重/温柔",不是"愤怒"。
-#     和"温柔(1.00, -2)"要拉开明显差距,不然听着都差不多。
 EMOTION_PROSODY = {
     '平静': (1.15, 0),
     '温柔': (1.00, -2),
@@ -86,6 +96,11 @@ EMOTION_PROSODY = {
 
 
 def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
+    # ★ 运行时取 key —— App 设置页改完立刻生效
+    fish_key = _cfg('FISH_KEY')
+    if not fish_key:
+        raise Exception('FISH_KEY 未配置')
+
     # ★ 不再往文字里塞 tag —— Fish 会念出来。只保留 "。 " 做暖场,避开首字被切
     final_text = f'。 {text}'
 
@@ -97,13 +112,16 @@ def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
     else:
         chunk_length = 200
 
-    actual_voice_id = voice_id or FISH_VOICE_ID
+    actual_voice_id = (voice_id or '').strip() or _cfg('FISH_VOICE_ID')
+    if not actual_voice_id:
+        raise Exception('voice_id 缺失（角色和全局默认都没设置）')
+
     speed, volume = EMOTION_PROSODY.get(emotion, (1.15, 0))
 
     response = requests.post(
         'https://api.fish.audio/v1/tts',
         headers={
-            'Authorization': f'Bearer {FISH_KEY}',
+            'Authorization': f'Bearer {fish_key}',
             'Content-Type': 'application/json',
             'model': FISH_MODEL,   # ★ 指定用哪个模型
         },
@@ -122,6 +140,7 @@ def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
             },
         },
         stream=True,
+        timeout=60,
     )
     if response.status_code != 200:
         raise Exception(f'Fish Audio error: {response.status_code} {response.text[:200]}')
@@ -139,9 +158,14 @@ def tts_to_b64(text: str, emotion: str, voice_id: str = None) -> str:
                 audio_bytes = fish_tts(text, emotion, voice_id)
             return base64.b64encode(audio_bytes).decode()
         except Exception as e:
-            if '429' in str(e) and attempt < 2:
+            msg = str(e)
+            if '429' in msg and attempt < 2:
                 time.sleep(1.5 * (attempt + 1))   # 等 1.5s / 3s 再试
                 continue
+            # ★ 401 是 key 无效，重试也没用，直接返回
+            if '401' in msg:
+                print(f'[TTS fail] key 无效（401）——请在 App 设置页填写完整的 Fish Key')
+                return ''
             print(f'[TTS fail] {text[:30]} | {e}')
             return ''
     return ''
@@ -156,14 +180,15 @@ def transcribe_audio_b64(audio_b64: str) -> dict:
     接收 base64 音频，用 Groq Whisper 转文字。
     返回: {"text": "..."} 或 {"text": "", "filtered": True, "reason": "..."}
     """
-    if not GROQ_KEY:
+    groq_key = _cfg('GROQ_KEY') or os.environ.get('GROQ_KEY', '')
+    if not groq_key:
         print('[transcribe] GROQ_KEY 未配置')
         return {'text': '', 'error': 'GROQ_KEY not configured'}
 
     try:
         from groq import Groq
 
-        client = Groq(api_key=GROQ_KEY)
+        client = Groq(api_key=groq_key)
         audio_bytes = base64.b64decode(audio_b64)
 
         if len(audio_bytes) < 2000:
