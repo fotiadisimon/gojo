@@ -93,6 +93,100 @@ def _accounts_block(user_id):
 ——如果检测到消费/收入,pending_transaction 里 account_hint 必须从这里选一个最合理的账户名字。'''
 
 
+def _schedule_block(user_id):
+    """把她近期的日程/纪念日拼成文本注入 prompt。
+
+    设计原则（和生理期那块一个思路）：
+    - 只注入"快到了"的，不是把整个待办清单倒给模型 —— 省 token，也避免角色变成播报机
+    - 纪念日按年循环，算的是"今年（或明年）的那一天"
+    - 没有临近的事就返回空串，模型完全不会提起
+    """
+    from datetime import datetime, date
+    try:
+        from db import get_conn
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT title, category, due_date, due_time, repeat_type, completed
+               FROM tasks
+               WHERE user_id = %s AND due_date IS NOT NULL
+               ORDER BY due_date ASC""",
+            (user_id,)
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f'[prompt] 读日程失败：{e}')
+        return ''
+
+    if not rows:
+        return ''
+
+    today = datetime.now(CN_TZ).date()
+    upcoming = []      # (剩余天数, 描述)
+
+    for title, category, due_date, due_time, repeat_type, completed in rows:
+        if not due_date:
+            continue
+        # due_date 可能是 date 也可能是字符串，统一成 date
+        if isinstance(due_date, str):
+            try:
+                d = datetime.strptime(due_date[:10], '%Y-%m-%d').date()
+            except ValueError:
+                continue
+        else:
+            d = due_date
+
+        is_anniv = (category == '纪念日')
+        yearly = (repeat_type == 'yearly')
+
+        if is_anniv and yearly:
+            # 每年循环：算到今年（或明年）的那一天
+            nxt = date(today.year, d.month, d.day)
+            if nxt < today:
+                nxt = date(today.year + 1, d.month, d.day)
+            days = (nxt - today).days
+            if days <= 14:
+                when = '就是今天' if days == 0 else f'{days}天后'
+                upcoming.append((days, f'🎂 {when}是「{title}」（每年的纪念日）'))
+        elif is_anniv:
+            days = (d - today).days
+            if 0 <= days <= 14:
+                when = '就是今天' if days == 0 else f'{days}天后'
+                upcoming.append((days, f'🎂 {when}是「{title}」'))
+        else:
+            if completed:
+                continue
+            days = (d - today).days
+            if 0 <= days <= 3:
+                when = '今天' if days == 0 else ('明天' if days == 1 else f'{days}天后')
+                t = f' {due_time}' if due_time else ''
+                upcoming.append((days, f'📌 {when}{t} 有「{title}」'))
+            elif days < 0:
+                upcoming.append((days, f'⚠️ 「{title}」已经过期 {-days} 天了，她还没勾掉'))
+
+    if not upcoming:
+        return ''
+
+    upcoming.sort(key=lambda x: x[0])
+    lines = '\n'.join(desc for _, desc in upcoming[:5])
+
+    return f'''
+
+【她最近的日程 —— 只有你默默记着的事】
+{lines}
+分寸要求：
+1. 不要一上来就播报日程。你不是提醒事项 App，是一个恰好记得这些事的人。
+2. 什么时候可以提：
+   · 话题自然滑到那件事附近（她说累/说忙/问你明天干嘛）→ 顺口带一句。
+   · 纪念日当天 → 可以主动提，但用你的方式，别搞成贺卡。
+   · 她明显忘了、而那件事就在眼前 → 戳她一下，语气随意。
+3. 什么时候别提：她正在说别的、情绪不好、或者那件事还早。
+4. 逾期没做的事可以拿来调侃，但点到为止，别变成催促。
+5. 提的时候不要报日期报得像日历，用「明天」「后天」这种人话。'''
+
+
 OUTPUT_SPEC = '''【回复格式——多气泡像真人聊天】
 你的回复用 1~3 条独立气泡呈现。一个完整意思 = 一个气泡。
 短回应 → 1 个气泡 10-25 字；展开 → 25-60 字；多话题 → 拆 2-3 个气泡。
@@ -488,8 +582,11 @@ def _build_prompt_parts(user_id, character_id=DEFAULT_CHARACTER_ID, user_message
     # ── ★ 账户列表（记账用,可能每次不同,放动态尾）──
     accounts_text = _accounts_block(user_id)
 
-    # ── ★ 角色专属铁律（公开版取消，人设全写在 core_prompt 里）──
-    canon_lock = (char.get('canon_lock') or '') if char else ''
+    # ── ★ 近期日程 / 纪念日（每天都在变,放动态尾）──
+    schedule_text = _schedule_block(user_id)
+
+    # ── ★ 角色专属铁律 ──
+    canon_lock = load_canon_lock(character_id)
 
     # ── 时间 + 输出规范 ──
     time_ctx = get_time_context()
@@ -506,7 +603,7 @@ def _build_prompt_parts(user_id, character_id=DEFAULT_CHARACTER_ID, user_message
 
     semi_static = f"""{memory_text}{bond_text}{told_text}""".strip() or '（还没有关于她的记忆）'
 
-    dynamic_tail = f"""{stage_text}{period_text}{recall_text}{diary_hint_block}{accounts_text}{avoid_text}{no_repeat_text}
+    dynamic_tail = f"""{stage_text}{period_text}{schedule_text}{recall_text}{diary_hint_block}{accounts_text}{avoid_text}{no_repeat_text}
 
 {time_ctx}
 

@@ -15,7 +15,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import axios from 'axios';
 import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -40,9 +40,14 @@ const { width, height } = Dimensions.get('window');
 // ★ 月历格子宽度:必须用 Math.floor 强制取整,不然 (width-56)/7 是小数,
 //   RN 底层向上取整时 7 个加起来会超容器宽度,最后一格被 flexWrap 挤到下一行,
 //   出现"7 天变 6 列"的锅。宁可右边留一点点空隙。
-const CELL_W_BIG = Math.floor((width - 56) / 7);   // 月历视图(月历 tab)
+// monthCard: marginHorizontal 16×2 + border 1×2 + calGrid paddingHorizontal 12×2 = 58
+// 留点余量，否则第 7 列会被挤到下一行（月历看起来"歪"就是这个原因）
+const CELL_W_BIG = Math.floor((width - 60) / 7);   // 月历视图(月历 tab)
 const CELL_W_SM  = Math.floor((width - 24) / 7);   // 日期选择器 modal 里的小月历
 const USER_ID_KEY = 'gojo_user_id';
+// ★ 兜底:新装的机器 AsyncStorage 是空的,没有这个兜底 userId 会一直是空字符串,
+//   导致所有带 `if (!userId) return` 的操作(记录生理期等)静默失效
+const FIXED_USER_ID = 'user_mofpiyd7442ia7';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -65,6 +70,7 @@ interface Task {
   last_completed_date?: string | null;
 }
 
+const PERIOD_PINK = '#e879a0';   // 生理期标记色（和纪念日同色系）
 const CATEGORY_LIST = ['个人', '工作', '心愿单', '纪念日'];
 const CATEGORY_COLORS: Record<string, string> = {
   '工作':   '#3b82f6',
@@ -75,6 +81,55 @@ const CATEGORY_COLORS: Record<string, string> = {
 const FILTER_TABS = ['所有', '工作', '个人', '心愿单', '纪念日'];
 const MONTHS = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
 const WEEKDAYS = ['日','一','二','三','四','五','六'];
+
+// ★ 纪念日距今还有几天 —— 按"今年的这个月日"算，已过就算明年的（用于每年重复的）
+function daysUntilAnniversary(dueDate?: string | null): number | null {
+  if (!dueDate) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const mm = parseInt(dueDate.slice(5, 7), 10) - 1;
+  const dd = parseInt(dueDate.slice(8, 10), 10);
+  if (isNaN(mm) || isNaN(dd)) return null;
+  let next = new Date(today.getFullYear(), mm, dd);
+  if (next < today) next = new Date(today.getFullYear() + 1, mm, dd);
+  return Math.round((next.getTime() - today.getTime()) / 86400000);
+}
+
+// ★ 绝对天数差：正数=还有几天，负数=已经过了几天（用于不重复的纪念日）
+function daysDiffAbsolute(dateStr?: string | null): number | null {
+  if (!dateStr) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;
+  return Math.round((d.getTime() - today.getTime()) / 86400000);
+}
+
+// ★ 一条纪念日现在该显示什么 —— Days Matter 那种"还有 N 天 / 已经 N 天"
+//   每年重复：永远倒数到下一个生日
+//   不重复：未来倒数，过去正数累加
+function anniversaryInfo(t: { due_date?: string | null; repeat_type?: string }) {
+  const yearly = t.repeat_type === 'yearly';
+  if (yearly) {
+    const d = daysUntilAnniversary(t.due_date) ?? 0;
+    return { days: d, isPast: false, label: d === 0 ? '就是今天' : '还有', yearly: true };
+  }
+  const d = daysDiffAbsolute(t.due_date);
+  if (d === null) return { days: 0, isPast: false, label: '', yearly: false };
+  if (d === 0)  return { days: 0, isPast: false, label: '就是今天', yearly: false };
+  if (d > 0)    return { days: d, isPast: false, label: '还有', yearly: false };
+  return { days: -d, isPast: true, label: '已经', yearly: false };
+}
+
+// ★ 每年重复时，目标日显示成"今年/明年的那一天"，而不是当初录入的年份
+function anniversaryTargetDate(t: { due_date?: string | null; repeat_type?: string }): string {
+  if (!t.due_date) return '';
+  if (t.repeat_type !== 'yearly') return t.due_date;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const mm = parseInt(t.due_date.slice(5, 7), 10) - 1;
+  const dd = parseInt(t.due_date.slice(8, 10), 10);
+  let next = new Date(today.getFullYear(), mm, dd);
+  if (next < today) next = new Date(today.getFullYear() + 1, mm, dd);
+  return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}-${String(next.getDate()).padStart(2,'0')}`;
+}
 const REMINDER_OPTIONS = [
   { label: '准时', val: 0 },
   { label: '5分钟前', val: 5 },
@@ -138,6 +193,9 @@ export default function CalendarScreen() {
   const [loading, setLoading]     = useState(true);
   const [userId, setUserId]       = useState('');
   const [activeTab, setActiveTab] = useState('所有');
+  // ★ 点标题弹出的年月日滚轮（像 Days Matter 那样，不用一个个月往回翻）
+  //   'month' = 月历 tab 的头；'picker' = 日期选择 modal 的头
+  const [jumpTarget, setJumpTarget] = useState<null | 'month' | 'picker'>(null);
   const [viewMode, setViewMode]   = useState<'list'|'month'>('list');   // ★ 双视图
   const [showCompleted, setShowCompleted] = useState(false);            // ★ 已完成折叠
   const [selDate, setSelDate]     = useState<string>(formatDate(new Date())); // ★ 月历选中日
@@ -201,12 +259,14 @@ export default function CalendarScreen() {
   };
 
   const recordPeriod = async (startDate: string, endDate?: string | null) => {
-    if (!userId) return;
+    // ★ 不再静默 return —— userId 万一还没就绪就用兜底值,
+    //   之前这里直接 return 导致"点了完全没反应",连错误提示都没有
+    const uid = userId || FIXED_USER_ID;
     try {
       await axios.post(`${SERVER_URL}/period/record`, {
-        user_id: userId, start_date: startDate, end_date: endDate || '',
+        user_id: uid, start_date: startDate, end_date: endDate || '',
       });
-      await loadPeriod(userId);
+      await loadPeriod(uid);
     } catch (e: any) {
       Alert.alert('记录失败', e?.response?.data?.error ?? e?.message ?? '检查后端是否已更新');
     }
@@ -218,7 +278,7 @@ export default function CalendarScreen() {
       { text: '删除', style: 'destructive', onPress: async () => {
         try {
           await axios.delete(`${SERVER_URL}/period/record/${rid}`);
-          await loadPeriod(userId);
+          await loadPeriod(userId || FIXED_USER_ID);
         } catch {}
       }},
     ]);
@@ -244,8 +304,15 @@ export default function CalendarScreen() {
           vibrationPattern: [0, 250, 250, 250],
         });
       }
-      const uid = await AsyncStorage.getItem(USER_ID_KEY);
-      if (uid) { setUserId(uid); await loadTasks(uid); loadPeriod(uid); }
+      let uid = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!uid) {
+        // 首次安装/换机:AsyncStorage 为空,用固定 id 并写回去
+        uid = FIXED_USER_ID;
+        try { await AsyncStorage.setItem(USER_ID_KEY, uid); } catch {}
+      }
+      setUserId(uid);
+      await loadTasks(uid);
+      loadPeriod(uid);
       setLoading(false);
     })();
   }, []);
@@ -542,16 +609,34 @@ export default function CalendarScreen() {
 
   const dailies   = pending.filter(t => t.repeat_type === 'daily');
   const nonDaily  = pending.filter(t => t.repeat_type !== 'daily');
-  const overdue   = nonDaily.filter(t => { const d = daysUntil(t.due_date); return d !== null && d < 0; });
-  const dueToday  = nonDaily.filter(t => daysUntil(t.due_date) === 0);
-  const dueTomorrow = nonDaily.filter(t => daysUntil(t.due_date) === 1);
-  const dueWeek   = nonDaily.filter(t => { const d = daysUntil(t.due_date); return d !== null && d >= 2 && d <= 7; });
-  const dueLater  = nonDaily.filter(t => { const d = daysUntil(t.due_date); return d !== null && d > 7; });
+
+  // ★ 纪念日是每年循环的，不能拿它去年的日期去算"逾期"——
+  //   统一走 daysUntilAnniversary，永远算到"今年（或明年）的那一天"
+  const daysLeft = (t: Task): number | null =>
+    (t.category === '纪念日' && t.repeat_type === 'yearly')
+      ? daysUntilAnniversary(t.due_date)
+      : daysUntil(t.due_date);
+
+  // ★ 纪念日单独拎出来，用 Days Matter 那种大数字卡片展示
+  const anniversaries = tasks
+    .filter(t => t.category === '纪念日' && t.due_date)
+    .sort((a, b) => {
+      const ia = anniversaryInfo(a), ib = anniversaryInfo(b);
+      // 未来的排前面（按天数升序），过去的排后面（按天数升序）
+      if (ia.isPast !== ib.isPast) return ia.isPast ? 1 : -1;
+      return ia.days - ib.days;
+    });
+
+  const overdue   = nonDaily.filter(t => { const d = daysLeft(t); return d !== null && d < 0; });
+  const dueToday  = nonDaily.filter(t => daysLeft(t) === 0);
+  const dueTomorrow = nonDaily.filter(t => daysLeft(t) === 1);
+  const dueWeek   = nonDaily.filter(t => { const d = daysLeft(t); return d !== null && d >= 2 && d <= 7; });
+  const dueLater  = nonDaily.filter(t => { const d = daysLeft(t); return d !== null && d > 7; });
   const noDate    = nonDaily.filter(t => !t.due_date);
 
   // ★ 今日进度：今天到期的任务 + 今天的打卡
   const todayScope = [...filtered.filter(t => t.repeat_type === 'daily' && !isDailyEnded(t)),
-                      ...nonDaily.filter(t => daysUntil(t.due_date) === 0),
+                      ...nonDaily.filter(t => daysLeft(t) === 0),
                       ...filtered.filter(t => t.repeat_type !== 'daily' && t.completed && t.due_date === todayStr)];
   const todayUniq  = Array.from(new Map(todayScope.map(t => [t.id, t])).values());
   const todayDone  = todayUniq.filter(isTaskCompleted).length;
@@ -563,9 +648,20 @@ export default function CalendarScreen() {
     .filter(t => { const d = daysUntil(t.due_date); return d !== null && d >= 0; })
     .sort((a, b) => (daysUntil(a.due_date)! - daysUntil(b.due_date)!))[0] || null;
 
-  // ★ 月历视图：某天有哪些任务（打卡按有效期算）
+  // ★ 纪念日是一年一次的 —— 只要月-日对得上就算，不管年份
+  const isAnniversary = (t: Task) => t.category === '纪念日' && !!t.due_date;
+  const sameMonthDay = (a: string, b: string) => a.slice(5) === b.slice(5);
+
+  // ★ 月历视图：某天有哪些任务（打卡按有效期算，纪念日按年循环）
   const tasksOnDate = (dateStr: string): Task[] => {
     return filtered.filter(t => {
+      // 纪念日：设成"每年重复"的每年今天都显示；不重复的只在那一天显示
+      if (isAnniversary(t)) {
+        if (t.repeat_type === 'yearly') {
+          return sameMonthDay(t.due_date!, dateStr) && dateStr >= t.due_date!;
+        }
+        return t.due_date === dateStr;
+      }
       if (isTaskCompleted(t) && t.repeat_type !== 'daily') {
         return t.due_date === dateStr;   // 已完成的也在它的日期上显示（打勾态）
       }
@@ -576,6 +672,49 @@ export default function CalendarScreen() {
       return t.due_date === dateStr;
     });
   };
+
+  // ★ 生理期：把已记录的周期 + 预测的下一次，都摊平成一个 date -> 类型 的表，
+  //   月历格子直接查这张表就能画标记
+  const periodDayMap = useMemo(() => {
+    const map: Record<string, 'actual' | 'predicted'> = {};
+    const addRange = (startStr: string, days: number, kind: 'actual' | 'predicted') => {
+      if (!startStr) return;
+      const d = new Date(startStr + 'T00:00:00');
+      if (isNaN(d.getTime())) return;
+      for (let i = 0; i < days; i++) {
+        const cur = new Date(d);
+        cur.setDate(d.getDate() + i);
+        const key = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}-${String(cur.getDate()).padStart(2,'0')}`;
+        if (!map[key]) map[key] = kind;   // 实际记录优先，不被预测覆盖
+      }
+    };
+    const avgLen = periodStatus?.avg_length || 5;
+
+    // 已记录的
+    for (const r of periodRecords) {
+      if (!r?.start_date) continue;
+      let days = avgLen;
+      if (r.end_date) {
+        const s = new Date(r.start_date + 'T00:00:00');
+        const e = new Date(r.end_date + 'T00:00:00');
+        const diff = Math.round((e.getTime() - s.getTime()) / 86400000) + 1;
+        if (diff > 0 && diff < 15) days = diff;
+      }
+      addRange(r.start_date, days, 'actual');
+    }
+    // 预测的下一次（往后推 3 个周期，翻月历也能看到）
+    if (periodStatus?.next_predicted) {
+      const cycle = periodStatus.avg_cycle || 28;
+      let next = periodStatus.next_predicted as string;
+      for (let n = 0; n < 3; n++) {
+        addRange(next, avgLen, 'predicted');
+        const d = new Date(next + 'T00:00:00');
+        d.setDate(d.getDate() + cycle);
+        next = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      }
+    }
+    return map;
+  }, [periodRecords, periodStatus]);
 
   const addDaysAway = (!isDailyContext && tempDate) ? daysUntil(tempDate) : null;
 
@@ -661,7 +800,77 @@ export default function CalendarScreen() {
         })}
       </ScrollView>
 
-      {viewMode === 'list' ? (
+      {viewMode === 'list' && activeTab === '纪念日' ? (
+        /* ════ 纪念日视图 —— Days Matter 那种倒数日样式 ════ */
+        <ScrollView style={{flex:1}} contentContainerStyle={s.list}>
+          {anniversaries.length === 0 ? (
+            <View style={s.emptyBox}>
+              <Text style={s.emptyEmoji}>🎂</Text>
+              <Text style={s.emptyText}>还没有纪念日{'\n'}点右下角 ＋ 添加一个</Text>
+            </View>
+          ) : (
+            <>
+              {/* 置顶大卡：最近的那一个 */}
+              {(() => {
+                const top = anniversaries[0];
+                const info = anniversaryInfo(top);
+                const target = anniversaryTargetDate(top);
+                const wd = target ? WEEKDAYS[new Date(target + 'T00:00:00').getDay()] : '';
+                return (
+                  <TouchableOpacity style={s.dmHero} activeOpacity={0.85} onPress={() => openEdit(top)}>
+                    <View style={{flex:1}}>
+                      <Text style={s.dmHeroTitle} numberOfLines={2}>
+                        {top.title}{info.isPast ? ' 已经' : (info.days === 0 ? '' : ' 还有')}
+                      </Text>
+                      <Text style={s.dmHeroDate}>
+                        目标日：{target} 星期{wd}
+                        {top.repeat_type === 'yearly' ? '  ·  每年' : ''}
+                      </Text>
+                    </View>
+                    <View style={s.dmHeroRight}>
+                      {info.days === 0 ? (
+                        <Text style={s.dmHeroToday}>今天</Text>
+                      ) : (
+                        <>
+                          <Text style={s.dmHeroNum}>{info.days}</Text>
+                          <View style={[s.dmHeroUnit, info.isPast && {backgroundColor:'#f59e0b'}]}>
+                            <Text style={s.dmHeroUnitText}>Days</Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })()}
+
+              {/* 其余的：条形卡 */}
+              {anniversaries.map(t => {
+                const info = anniversaryInfo(t);
+                const tint = info.isPast ? '#f59e0b' : (C.accent2 || '#5BC4FF');
+                return (
+                  <TouchableOpacity key={t.id} style={s.dmRow} activeOpacity={0.8}
+                    onPress={() => openEdit(t)}>
+                    <View style={s.dmRowLeft}>
+                      <Text style={s.dmRowTitle} numberOfLines={1}>
+                        {t.title}{info.isPast ? ' 已经' : (info.days === 0 ? '' : ' 还有')}
+                      </Text>
+                      {t.repeat_type === 'yearly' && (
+                        <Text style={s.dmRowRepeat}>🔁 每年</Text>
+                      )}
+                    </View>
+                    <View style={[s.dmRowNum, {backgroundColor: tint + 'cc'}]}>
+                      <Text style={s.dmRowNumText}>{info.days === 0 ? '今天' : info.days}</Text>
+                    </View>
+                    <View style={[s.dmRowUnit, {backgroundColor: tint}]}>
+                      <Text style={s.dmRowUnitText}>{info.days === 0 ? '🎉' : '天'}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </>
+          )}
+        </ScrollView>
+      ) : viewMode === 'list' ? (
         /* ════ 列表视图 ════ */
         <ScrollView style={{flex:1}} contentContainerStyle={s.list}>
           {overdue.length > 0 && (
@@ -736,10 +945,14 @@ export default function CalendarScreen() {
                 if (viewMonth === 0) { setViewMonth(11); setViewYear(viewYear-1); }
                 else setViewMonth(viewMonth-1);
               }}><Text style={s.calNav}>◀</Text></TouchableOpacity>
-              <TouchableOpacity onPress={() => {
-                setViewYear(new Date().getFullYear()); setViewMonth(new Date().getMonth()); setSelDate(todayStr);
-              }}>
-                <Text style={s.calHeaderTitle}>{MONTHS[viewMonth]} {viewYear}</Text>
+              <TouchableOpacity
+                onPress={() => setJumpTarget('month')}
+                onLongPress={() => {
+                  setViewYear(new Date().getFullYear()); setViewMonth(new Date().getMonth()); setSelDate(todayStr);
+                }}
+              >
+                <Text style={s.calHeaderTitle}>{MONTHS[viewMonth]} {viewYear} ▾</Text>
+                <Text style={s.calHeaderHint}>点击跳转 · 长按回今天</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => {
                 if (viewMonth === 11) { setViewMonth(0); setViewYear(viewYear+1); }
@@ -758,15 +971,20 @@ export default function CalendarScreen() {
                 const isSel = selDate === date;
                 const isTd  = date === todayStr;
                 const dots = dayTasks.slice(0, 3);
+                const periodKind = periodDayMap[date];   // 'actual' | 'predicted' | undefined
                 return (
                   <TouchableOpacity key={date} style={s.calCellBig} onPress={() => setSelDate(date)}>
                     <View style={[
                       s.calDayWrapBig,
+                      // ★ 生理期底色：实际记录是实心淡粉，预测是虚线圈
+                      periodKind === 'actual' && !isSel && s.periodDayActual,
+                      periodKind === 'predicted' && !isSel && s.periodDayPredicted,
                       isSel && {backgroundColor: C.accent2 || '#5BC4FF'},
                       isTd && !isSel && {borderWidth:1.5, borderColor: C.accent2 || '#5BC4FF'},
                     ]}>
                       <Text style={[
                         s.calDayText,
+                        periodKind && !isSel && {color: PERIOD_PINK},
                         isSel && {color:'#fff', fontWeight:'700'},
                         isTd && !isSel && {color: C.accent2 || '#5BC4FF'},
                       ]}>{day}</Text>
@@ -847,16 +1065,28 @@ export default function CalendarScreen() {
                 <View style={[s.catDot, {backgroundColor: CATEGORY_COLORS[newCategory] || C.accent}]} />
                 <Text style={s.catChipText}>{newCategory} ▼</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.repeatBtn, newRepeat === 'daily' && {backgroundColor:'#d97706', borderColor:'#d97706'}]}
-                onPress={() => {
-                  const next = newRepeat === 'daily' ? 'none' : 'daily';
-                  setNewRepeat(next);
-                  setNewDueDate(null);
-                }}
-              >
-                <Text style={[s.repeatBtnText, newRepeat === 'daily' && {color:'#fff'}]}>🔁</Text>
-              </TouchableOpacity>
+              {/* ★ 纪念日：🔁 切换的是"每年重复"；其他分类：切换"每日打卡" */}
+              {newCategory === '纪念日' ? (
+                <TouchableOpacity
+                  style={[s.repeatBtn, newRepeat === 'yearly' && {backgroundColor: CATEGORY_COLORS['纪念日'], borderColor: CATEGORY_COLORS['纪念日']}]}
+                  onPress={() => setNewRepeat(newRepeat === 'yearly' ? 'none' : 'yearly')}
+                >
+                  <Text style={[s.repeatBtnText, newRepeat === 'yearly' && {color:'#fff'}]}>
+                    {newRepeat === 'yearly' ? '每年' : '一次'}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[s.repeatBtn, newRepeat === 'daily' && {backgroundColor:'#d97706', borderColor:'#d97706'}]}
+                  onPress={() => {
+                    const next = newRepeat === 'daily' ? 'none' : 'daily';
+                    setNewRepeat(next);
+                    setNewDueDate(null);
+                  }}
+                >
+                  <Text style={[s.repeatBtnText, newRepeat === 'daily' && {color:'#fff'}]}>🔁</Text>
+                </TouchableOpacity>
+              )}
               <View style={{flex:1}} />
               <TouchableOpacity style={s.iconBtn} onPress={() => openDateModal('add')}>
                 <Text style={[
@@ -878,7 +1108,13 @@ export default function CalendarScreen() {
               <View style={s.catFloatMenu}>
                 {CATEGORY_LIST.map(cat => (
                   <TouchableOpacity key={cat} style={s.catFloatItem}
-                    onPress={() => { setNewCategory(cat); setShowCatPicker(false); }}>
+                    onPress={() => {
+                      setNewCategory(cat);
+                      setShowCatPicker(false);
+                      // 纪念日默认按年重复（生日场景最多）；切走时恢复不重复
+                      if (cat === '纪念日') setNewRepeat('yearly');
+                      else if (newRepeat === 'yearly') setNewRepeat('none');
+                    }}>
                     <View style={[s.catDot, {backgroundColor: CATEGORY_COLORS[cat] || C.accent}]} />
                     <Text style={[s.catFloatText, newCategory===cat && {fontWeight:'700', color:C.text}]}>{cat}</Text>
                   </TouchableOpacity>
@@ -889,6 +1125,50 @@ export default function CalendarScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+
+      {/* ═══ ★ 年月跳转滚轮 —— 点日历标题弹出，像 Days Matter 那样直接滚到目标年月 ═══ */}
+      <Modal visible={jumpTarget !== null} transparent animationType="slide">
+        <View style={{flex:1}}>
+          <Pressable style={{flex:1, backgroundColor:'#00000055'}} onPress={() => setJumpTarget(null)} />
+          <View style={s.jumpSheet}>
+            <Text style={s.jumpTitle}>跳转到</Text>
+            <DateTimePicker
+              value={jumpTarget === 'month'
+                ? new Date(viewYear, viewMonth, 1)
+                : new Date(calYear, calMonth, 1)}
+              mode="date"
+              display="spinner"
+              themeVariant="dark"
+              textColor={C.text}
+              locale="zh-CN"
+              onChange={(event: any, d?: Date) => {
+                if (event?.type === 'dismissed') { setJumpTarget(null); return; }
+                if (!d) return;
+                if (jumpTarget === 'month') {
+                  setViewYear(d.getFullYear()); setViewMonth(d.getMonth());
+                } else {
+                  setCalYear(d.getFullYear()); setCalMonth(d.getMonth());
+                }
+                // Android 的 spinner 是弹窗式，选完就关；iOS 是内嵌的，留着让用户继续滚
+                if (Platform.OS === 'android') setJumpTarget(null);
+              }}
+            />
+            <View style={s.jumpQuickRow}>
+              <TouchableOpacity style={s.jumpQuickBtn} onPress={() => {
+                const now = new Date();
+                if (jumpTarget === 'month') { setViewYear(now.getFullYear()); setViewMonth(now.getMonth()); }
+                else { setCalYear(now.getFullYear()); setCalMonth(now.getMonth()); }
+                setJumpTarget(null);
+              }}>
+                <Text style={s.jumpQuickText}>回到本月</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.jumpQuickBtn, s.jumpDoneBtn]} onPress={() => setJumpTarget(null)}>
+                <Text style={[s.jumpQuickText, {color:'#fff', fontWeight:'700'}]}>完成</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* ═══ 日期选择 Modal ═══ */}
       <Modal visible={showDateModal} transparent animationType="slide">
@@ -907,9 +1187,11 @@ export default function CalendarScreen() {
                   if (calMonth === 0) { setCalMonth(11); setCalYear(calYear-1); }
                   else setCalMonth(calMonth-1);
                 }}><Text style={s.calNav}>◀</Text></TouchableOpacity>
-                <Text style={s.calHeaderTitle}>
-                  {isDailyContext ? '结束日期 · ' : ''}{MONTHS[calMonth]} {calYear}
-                </Text>
+                <TouchableOpacity onPress={() => setJumpTarget('picker')}>
+                  <Text style={s.calHeaderTitle}>
+                    {isDailyContext ? '结束日期 · ' : ''}{MONTHS[calMonth]} {calYear} ▾
+                  </Text>
+                </TouchableOpacity>
                 <TouchableOpacity onPress={() => {
                   if (calMonth === 11) { setCalMonth(0); setCalYear(calYear+1); }
                   else setCalMonth(calMonth+1);
@@ -1141,6 +1423,13 @@ export default function CalendarScreen() {
                 >
                   <Text style={[s.repeatChipText, editRepeat === 'daily' && {color:'#d97706'}]}>每日打卡</Text>
                 </TouchableOpacity>
+                {/* ★ 每年重复 —— 生日、周年这种一年一次的 */}
+                <TouchableOpacity
+                  style={[s.repeatChip, editRepeat === 'yearly' && {backgroundColor: CATEGORY_COLORS['纪念日']+'33', borderColor: CATEGORY_COLORS['纪念日']}]}
+                  onPress={() => setEditRepeat('yearly')}
+                >
+                  <Text style={[s.repeatChipText, editRepeat === 'yearly' && {color: CATEGORY_COLORS['纪念日']}]}>每年</Text>
+                </TouchableOpacity>
               </View>
             </View>
             <View style={s.divider} />
@@ -1333,7 +1622,19 @@ function TaskRow({ task, onPress, onCheck, done }: {
               {!dailyEnded && task.due_date ? `  ·  至${task.due_date.slice(5).replace('-','/')}` : ''}
             </Text>
           )}
-          {!isDaily && task.due_date && (
+          {/* ★ 纪念日：一年一次，显示"每年 M月D日"和今年还有几天 */}
+          {!isDaily && task.category === '纪念日' && task.due_date && (
+            <Text style={[s.taskDate, {color: CATEGORY_COLORS['纪念日']}]}>
+              {`🎂 每年 ${task.due_date.slice(5, 7)}月${task.due_date.slice(8, 10)}日`}
+              {(() => {
+                const d = daysUntilAnniversary(task.due_date);
+                if (d === 0) return '  ·  就是今天';
+                if (d !== null && d <= 30) return `  ·  还有${d}天`;
+                return '';
+              })()}
+            </Text>
+          )}
+          {!isDaily && task.category !== '纪念日' && task.due_date && (
             <Text style={[s.taskDate, isOverdue && {color:'#f87171'}]}>
               {friendlyDate(task.due_date)}{task.due_time ? `  ${task.due_time}` : ''}
             </Text>
@@ -1439,6 +1740,8 @@ const s = StyleSheet.create({
   sectionLabel: { color:C.textMute, fontSize:11, letterSpacing:1, marginTop:12, marginBottom:4, fontWeight:'700' },
   emptyWrap: { alignItems:'center', marginTop:60 },
   emptyText: { color:C.textMute, fontSize:14, textAlign:'center', lineHeight:24 },
+  emptyBox:  { alignItems:'center', paddingTop:80 },
+  emptyEmoji:{ fontSize:48, marginBottom:14 },
 
   taskRow: {
     flexDirection:'row', alignItems:'center',
@@ -1484,6 +1787,39 @@ const s = StyleSheet.create({
   weekRowM:   { flexDirection:'row', paddingHorizontal:12, marginBottom:4 },
   weekLabelM: { color:C.textMute, fontSize:12, width: CELL_W_BIG, textAlign:'center' },
   calDayWrapBig: { width:32, height:32, borderRadius:16, alignItems:'center', justifyContent:'center' },
+  // ★ 生理期标记：实际记录=淡粉实心，预测=粉色虚线圈
+  // ★ Days Matter 倒数日样式
+  dmHero: {
+    flexDirection:'row', alignItems:'center',
+    backgroundColor:C.card, borderRadius:18, borderWidth:1, borderColor:C.border,
+    paddingVertical:24, paddingHorizontal:20, marginBottom:16,
+  },
+  dmHeroTitle: { color:C.text, fontSize:20, fontWeight:'700', lineHeight:28 },
+  dmHeroDate:  { color:C.textMute, fontSize:12, marginTop:8 },
+  dmHeroRight: { flexDirection:'row', alignItems:'center', marginLeft:12 },
+  dmHeroNum:   { color:C.text, fontSize:52, fontWeight:'800', letterSpacing:-1 },
+  dmHeroUnit:  {
+    backgroundColor:'#ef4444', borderRadius:6,
+    paddingHorizontal:7, paddingVertical:3, marginLeft:6, marginTop:14,
+  },
+  dmHeroUnitText: { color:'#fff', fontSize:11, fontWeight:'800' },
+  dmHeroToday: { color:'#ef4444', fontSize:34, fontWeight:'800' },
+
+  dmRow: {
+    flexDirection:'row', alignItems:'stretch',
+    backgroundColor:C.card, borderRadius:12, borderWidth:1, borderColor:C.border,
+    marginBottom:10, overflow:'hidden', minHeight:54,
+  },
+  dmRowLeft:  { flex:1, justifyContent:'center', paddingHorizontal:16, paddingVertical:12 },
+  dmRowTitle: { color:C.text, fontSize:15, fontWeight:'600' },
+  dmRowRepeat:{ color:C.textMute, fontSize:11, marginTop:3 },
+  dmRowNum:   { width:88, alignItems:'center', justifyContent:'center' },
+  dmRowNumText:{ color:'#fff', fontSize:22, fontWeight:'800' },
+  dmRowUnit:  { width:52, alignItems:'center', justifyContent:'center' },
+  dmRowUnitText:{ color:'#fff', fontSize:15, fontWeight:'700' },
+
+  periodDayActual:    { backgroundColor: PERIOD_PINK + '33' },
+  periodDayPredicted: { borderWidth:1, borderStyle:'dashed', borderColor: PERIOD_PINK + '99' },
   dotRow: { flexDirection:'row', gap:2, marginTop:2, alignItems:'center', height:6 },
   taskDot: { width:5, height:5, borderRadius:2.5 },
   dotMore: { color:C.textMute, fontSize:8, lineHeight:8 },
@@ -1563,7 +1899,22 @@ const s = StyleSheet.create({
   },
   ddlNoteText: { color:C.accent2||'#5BC4FF', fontSize:12, lineHeight:17 },
   calHeader: { flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingHorizontal:28, marginBottom:16 },
-  calHeaderTitle: { color:C.text, fontSize:17, fontWeight:'700' },
+  calHeaderTitle: { color:C.text, fontSize:17, fontWeight:'700', textAlign:'center' },
+  calHeaderHint:  { color:C.textMute, fontSize:9, textAlign:'center', marginTop:2 },
+  // ★ 年月跳转滚轮
+  jumpSheet: {
+    backgroundColor:C.card, borderTopLeftRadius:20, borderTopRightRadius:20,
+    paddingTop:16, paddingBottom: Platform.OS==='ios' ? 36 : 20, paddingHorizontal:16,
+    borderTopWidth:1, borderColor:C.border,
+  },
+  jumpTitle: { color:C.text, fontSize:16, fontWeight:'700', textAlign:'center', marginBottom:8 },
+  jumpQuickRow: { flexDirection:'row', gap:10, marginTop:12 },
+  jumpQuickBtn: {
+    flex:1, paddingVertical:13, borderRadius:14, alignItems:'center',
+    borderWidth:1, borderColor:C.border, backgroundColor:C.card2,
+  },
+  jumpDoneBtn: { backgroundColor:C.accent, borderColor:C.accent },
+  jumpQuickText: { color:C.textDim, fontSize:14 },
   calNav: { color:C.accent2||'#5BC4FF', fontSize:18, padding:4 },
   weekRow: { flexDirection:'row', paddingHorizontal:12, marginBottom:4 },
   weekLabel: { color:C.textMute, fontSize:12, width: CELL_W_SM, textAlign:'center' },
