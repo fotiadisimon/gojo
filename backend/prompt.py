@@ -1,5 +1,5 @@
 """Prompt 动态组装：把角色定义 + 用户记忆 + 羁绊记忆 + 角色背景 + 对话上下文拼起来
-★ CANON_LOCK 按 character_id 从 characters_data/<id>/canon_lock.py 动态加载
+★ CANON_LOCK 存在 characters 表的 canon_lock 字段里，在 App 的角色编辑页填写
 ★ v3 新增：注入"你们之间的事"(bond) 和"她告诉过你的事"(told) 两段羁绊记忆
 ★ 记账升级新增：
     - _accounts_block() 在动态尾里注入当前用户的账户列表(dynamic_tail,不缓存)
@@ -586,7 +586,8 @@ def _build_prompt_parts(user_id, character_id=DEFAULT_CHARACTER_ID, user_message
     schedule_text = _schedule_block(user_id)
 
     # ── ★ 角色专属铁律 ──
-    canon_lock = load_canon_lock(character_id)
+    # ★ 角色专属铁律：从 DB 角色记录里读（在 App 的角色编辑页里填）
+    canon_lock = (char.get('canon_lock') or '') if char else ''
 
     # ── 时间 + 输出规范 ──
     time_ctx = get_time_context()
