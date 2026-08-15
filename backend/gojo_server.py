@@ -30,6 +30,8 @@ from route_proactive import router as proactive_router
 from route_settings import router as settings_router
 from db_diary import init_diary_tables
 from db_promise import init_promise_table
+from db_schedule import init_schedule_table
+from migrate_two_level_recall import migrate_two_level
 from proactive_msg import init_proactive_table
 from push_notify import init_push_table
 
@@ -48,10 +50,17 @@ async def startup():
     init_db()
     init_diary_tables()
     init_promise_table()
+    init_schedule_table()          # ★ 角色日程表（"已读不回"依赖）
     init_proactive_table()
     init_push_table()
     init_period_table()
     seed_all_characters()
+
+    # ★ 两级召回列迁移（mention_count / linked_fact_id 等,幂等）
+    try:
+        migrate_two_level()
+    except Exception as e:
+        print(f'[startup] 两级召回迁移跳过：{e}')
 
     # RAG（可选，没配就自动退回关键词检索）
     try:

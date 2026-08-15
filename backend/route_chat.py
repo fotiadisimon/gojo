@@ -242,6 +242,86 @@ async def chat_text(data: dict):
     if not char:
         return JSONResponse({'error': f'character {character_id} not found'}, status_code=404)
 
+    # ★ 角色日程:他现在可能真的走不开(上课/出任务/洗澡)。
+    #   走不开就【只已读不回】,并排一条 promise 等忙完再回 ——
+    #   这比秒回一句"我在忙"更像真人。
+    #   ⚠️ 需要 char_schedule 表里有当天日程。schedule_engine 每天自动生成;
+    #      也可以在 App 里由用户主动触发 ensure_today()。
+    #      如果 DB 里根本没日程,这段整个跳过,回退到正常流程,不影响老用户。
+    try:
+        import db_schedule, db_promise
+        from datetime import datetime as _dt, timedelta as _td
+        from config import CN_TZ as _CN_TZ
+        _now_dt = _dt.now(_CN_TZ)
+        act = db_schedule.get_current_activity(character_id, user_id, _now_dt)
+        if act and not act['can_reply']:
+            # 先把这句话存进短期记忆,不然他忙完回来不知道你说了啥
+            save_short_memory(user_id, 'user', user_text, character_id)
+
+            free_at = db_schedule.get_next_free_time(character_id, user_id, _now_dt) or act['end_time']
+            try:
+                hh, mm = free_at.split(':')
+                trigger_at = _now_dt.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+                if trigger_at <= _now_dt:          # 跨到明天了
+                    trigger_at += _td(days=1)
+
+                # ★ 关键去重:用户在你忙的期间连发几条,不要每条都建 promise ——
+                #   否则你"忙完"那一刻 scheduler 会一次触发多条 promise,
+                #   生成 4-5 条内容相似的复读消息。
+                #   做法:查一下最近 6h 内有没有还没触发的 once promise,
+                #   有 → 合并进那条的 context;没有 → 才新建。
+                _conn = get_conn()
+                _cur = _conn.cursor()
+                try:
+                    _cur.execute(
+                        """SELECT id, context FROM proactive_promise
+                           WHERE character_id=%s AND user_id=%s
+                             AND trigger_kind='once'
+                             AND is_fired=FALSE AND is_active=TRUE
+                             AND created_at >= NOW() - INTERVAL '6 hours'
+                           ORDER BY created_at DESC LIMIT 1""",
+                        (character_id, user_id))
+                    _row = _cur.fetchone()
+                    if _row:
+                        # 已经有一条待触发的 promise → 追加这句进去,并把触发时间刷成最新的 free_at
+                        _pid, _existing_ctx = _row
+                        _new_ctx = (_existing_ctx or '') + f'\n她后来又说:「{user_text[:150]}」'
+                        _cur.execute(
+                            """UPDATE proactive_promise
+                               SET context=%s, trigger_at=%s
+                               WHERE id=%s""",
+                            (_new_ctx, trigger_at, _pid))
+                        _conn.commit()
+                        print(f'[{user_id}] 📵 追加到已有 promise #{_pid},合并回复不复读')
+                    else:
+                        db_promise.add_promise(
+                            character_id=character_id, user_id=user_id,
+                            trigger_kind='once', trigger_at=trigger_at,
+                            context=(f'刚才我在{act["title"]}(走不开),没能回她。'
+                                     f'她当时说:「{user_text[:150]}」。'
+                                     f'现在忙完了,回一下她 —— 可以顺口提一句刚才在忙什么。'
+                                     f'如果她期间还说了别的事,把话头拢起来一起回,别逐条应答。'),
+                            origin_text=user_text[:200],
+                        )
+                        print(f'[{user_id}] 📵 {character_id} 正在「{act["title"]}」,只已读,{free_at} 忙完再回')
+                finally:
+                    _cur.close()
+                    _conn.close()
+            except Exception as _e:
+                print(f'[{user_id}] 排延迟回复失败:{_e}')
+
+            return JSONResponse({
+                'busy': True,
+                'activity': act['title'],
+                'location': act.get('location', ''),
+                'until': act['end_time'],
+                'free_at': free_at,
+                'total_days': update_chat_days(user_id),
+            })
+    except Exception as _e:
+        # ★ 日程系统不可用 / 无日程 → 静默跳过,走正常聊天流程
+        print(f'[{user_id}] 日程检查跳过(不影响聊天):{_e}')
+
     total_days = update_chat_days(user_id)
     short_memories = get_short_memory(user_id, 6, character_id)
 

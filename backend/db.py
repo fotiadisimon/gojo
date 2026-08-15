@@ -122,6 +122,27 @@ def init_db():
     cur.execute('''CREATE INDEX IF NOT EXISTS idx_accounting_records_account
                    ON accounting_records (account_id)''')
 
+    # ── ★ 角色自己的一天(日程表)──
+    # 让角色有自己的生活节奏 —— 上课/出任务/洗澡时是真的走不开,
+    # 消息只会显示已读,忙完才回。can_reply=false 的时段就是"只已读不回"。
+    cur.execute('''CREATE TABLE IF NOT EXISTS char_schedule (
+        id SERIAL PRIMARY KEY,
+        character_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        sched_date DATE NOT NULL,
+        start_time TEXT NOT NULL,        -- 'HH:MM'
+        end_time TEXT NOT NULL,          -- 'HH:MM'
+        title TEXT NOT NULL,             -- 做什么
+        location TEXT DEFAULT '',        -- 在哪
+        note TEXT DEFAULT '',            -- 角色口吻的一句碎碎念
+        can_reply BOOLEAN DEFAULT TRUE,  -- 这段时间能不能回消息
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    cur.execute('''CREATE INDEX IF NOT EXISTS idx_sched_lookup
+                   ON char_schedule (character_id, user_id, sched_date, start_time)''')
+    cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_sched_uniq
+                   ON char_schedule (character_id, user_id, sched_date, start_time)''')
+
     # ── 老表自动加列(向后兼容)──
     cur.execute("ALTER TABLE short_memory ADD COLUMN IF NOT EXISTS character_id TEXT DEFAULT 'gojo'")
     cur.execute("ALTER TABLE long_memory ADD COLUMN IF NOT EXISTS character_id TEXT DEFAULT 'gojo'")
