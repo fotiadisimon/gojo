@@ -2,17 +2,19 @@
 
 被 diary_scheduler（常驻排程）和 route_diary（开 App 补偿）调用。
 本文件只管"生成内容"，不管"何时触发"——触发在 scheduler 里。
+
+★ v2 修复 (记忆/日记完全丢失 bug)：
+   - 删除模块顶层 claude_client 单例（用的是导入时的空 key，永远认证失败）
+   - 所有 MODEL_CN_AUX 引用改成 config.get_setting()，App 里改完立即生效
 """
 import random
+import config
 from datetime import datetime, timedelta
-from config import ANTHROPIC_KEY, CN_TZ, DEFAULT_CHARACTER_ID
-import anthropic
+from config import CN_TZ, DEFAULT_CHARACTER_ID
 
 from characters import get_character
 from user_memory import get_bond_memories, get_short_memory, get_long_memory, get_first_interaction_days
 import db_diary
-
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 EMOTIONS_FOR_DIARY = ['平静', '温柔', '调皮', '认真', '开心', '疑惑', '悲伤', '自信']
 
@@ -144,9 +146,9 @@ emotion 从这里选：{'/'.join(EMOTIONS_FOR_DIARY)}'''
 
         # ★ 日记正文(纯中文创作),走 MODEL_CN_AUX(默认 deepseek-chat,中文创作强)
         from ai_client import create_chat
-        from config import MODEL_CN_AUX
+        _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         raw, _usage = create_chat(
-            model=MODEL_CN_AUX, max_tokens=400,
+            model=_model, max_tokens=400,
             messages=[{'role': 'user', 'content': prompt}],
         )
         raw = raw.strip()
@@ -192,9 +194,9 @@ def _name_own_diary(char_name):
 以你自己的口吻和性格取名，几个字就好，别太正经、别像作文题目，像你会随手写下的那种。
 只输出这个名字本身，不要引号、不要解释、不要标点结尾。'''
         from ai_client import create_chat
-        from config import MODEL_CN_AUX
+        _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         name, _usage = create_chat(
-            model=MODEL_CN_AUX, max_tokens=40,
+            model=_model, max_tokens=40,
             messages=[{'role': 'user', 'content': prompt}],
         )
         name = name.strip().strip('「」"\'。').strip()
@@ -355,9 +357,9 @@ def maybe_write_diary_on_event(character_id, user_id, user_text, reply_text):
 - 如果不算：{{"worth":false}}'''
 
         from ai_client import create_chat
-        from config import MODEL_CN_AUX
+        _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         raw, _usage = create_chat(
-            model=MODEL_CN_AUX, max_tokens=150,
+            model=_model, max_tokens=150,
             messages=[{'role': 'user', 'content': judge_prompt}],
         )
         raw = raw.strip()

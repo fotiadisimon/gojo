@@ -19,8 +19,11 @@ MODEL_MAIN = os.getenv('MODEL_MAIN', 'claude-opus-4-6')
 # MODEL_JP_AUX: 日语辅助任务(流式语音/提醒/scheduler 反应/主动消息)—— Haiku 便宜快
 MODEL_JP_AUX = os.getenv('MODEL_JP_AUX', 'claude-haiku-4-5-20251001')
 
-# MODEL_CN_AUX: 中文辅助任务(记忆提取/日记生成/纠错)—— DeepSeek 便宜、中文好
-MODEL_CN_AUX = os.getenv('MODEL_CN_AUX', 'deepseek-v4-flash')
+# MODEL_CN_AUX: 中文辅助任务(记忆提取/日记生成/纠错)—— 默认 Haiku,便宜快、质量稳
+# ★ 默认改成 'claude-haiku-4-5-20251001'（跟 backend 私仓一致,DeepSeek 效果不理想）
+#   之前的 'deepseek-v4-flash' 是错的模型名,会导致所有记忆提取 404 → 静默失败
+#   想省钱走 DeepSeek 的话,在 App 设置页把这项改成 'deepseek-chat' 即可
+MODEL_CN_AUX = os.getenv('MODEL_CN_AUX', 'claude-haiku-4-5-20251001')
 
 # DeepSeek 配置(MODEL_CN_AUX 走 DS 时使用)
 DEEPSEEK_KEY = os.getenv('DEEPSEEK_KEY', '')
