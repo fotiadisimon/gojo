@@ -21,7 +21,7 @@ const FIELDS = [
   { key: 'DEEPSEEK_KEY',      label: 'DeepSeek / Gemini Key', secret: true, hint: '两者共用这一栏' },
   { key: 'DEEPSEEK_MODEL',    label: '模型名',             hint: 'deepseek-chat 或 gemini-3.6-flash' },
   { key: 'DEEPSEEK_BASE_URL', label: 'Base URL',          hint: 'https://api.deepseek.com' },
-  { key: 'MODEL_CN_AUX',      label: '后台任务模型',       hint: '记忆提取/日记生成用，填同上' },
+  { key: 'MODEL_CN_AUX',      label: '后台任务模型',       hint: '记忆提取/日记生成用。推荐 claude-haiku-4-5-20251001（准确+便宜）；DeepSeek 记忆效果一般不推荐' },
   { key: 'FISH_KEY',          label: 'Fish Audio Key',    secret: true,  hint: 'sk-fish-...' },
   { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',      hint: '角色没单独配音色时用这个' },
 ] as const;
