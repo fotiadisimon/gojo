@@ -37,7 +37,7 @@ export const WEEKDAYS = ['日','一','二','三','四','五','六'];
 export const MONTHS = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-export const DEFAULT_SERVER_URL = 'https://gojopub.zeabur.app';
+export const DEFAULT_SERVER_URL = 'https://fotiadisimon.zeabur.app';
 
 export let SERVER_URL = DEFAULT_SERVER_URL;
 
