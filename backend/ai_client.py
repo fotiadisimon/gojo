@@ -1,5 +1,11 @@
 """统一 LLM 客户端 adapter —— 让代码不用管走 Anthropic 还是 DeepSeek
 
+★ v3：Provider 优先，避免中转 API 用户被劫持到官方 Anthropic
+  用户在 App 里选了 provider=deepseek → 所有请求走 OpenAI 兼容路径
+  (可以是 deepseek 官方,也可以是任何中转 tdyun/anyrouter/oneapi 等)
+  用户选 claude → 所有走官方 Anthropic 直连
+  没选 → 按 model 前缀分派(向下兼容)
+
 ★ v2：所有配置改为运行时读 config.get_setting()，
   这样在 App 设置页里改 key / base_url / 模型，下一次调用立刻生效，
   不用重启服务、不用动 Zeabur 环境变量。
@@ -13,10 +19,12 @@
         max_tokens=400,
     )
 
-按 model 前缀分发:
-- 'claude-*' / 'anthropic-*' → Anthropic 原生 SDK
-- 其他（deepseek-* / gemini-* / gemma-* …）→ OpenAI 兼容接口，
-  具体连哪家由 DEEPSEEK_BASE_URL 决定
+按 provider(优先) 或 model 前缀(兜底) 分发:
+- provider=deepseek → OpenAI 兼容接口(可指向中转) —— 不管模型前缀
+- provider=claude   → Anthropic 原生 SDK —— 不管模型前缀
+- 未设 provider,按前缀:
+  - 'claude-*' / 'anthropic-*' → Anthropic
+  - 其他 → OpenAI 兼容
 """
 import json
 import requests
@@ -36,7 +44,12 @@ def _clean(key: str, fallback: str = '') -> str:
 
 
 def create_chat(model, messages, system=None, max_tokens=1000, temperature=None):
-    """统一接口,自动按 model 前缀分发到 Anthropic 或 DeepSeek。
+    """统一接口,自动分发到 Anthropic 或 DeepSeek(OpenAI 兼容)。
+
+    ★ v3: 分派优先级
+       1. LLM_PROVIDER=deepseek → 强制走 _call_deepseek(打中转/DeepSeek 官方)
+       2. LLM_PROVIDER=claude → 强制走 _call_anthropic(官方直连)
+       3. 未设 provider → 按 model 前缀(claude-/anthropic- 走 Anthropic, 其他走 OpenAI)
 
     Args:
         model: 'claude-*' 走 Anthropic,'deepseek-*' 走 DS
@@ -52,12 +65,22 @@ def create_chat(model, messages, system=None, max_tokens=1000, temperature=None)
         RuntimeError: provider 报错时抛出
     """
     model = (model or '').strip()
+    provider = _clean('LLM_PROVIDER', '').lower()
+
     if not model:
         # 没传模型名时按当前 provider 猜一个合理默认
-        provider = _clean('LLM_PROVIDER', 'claude').lower()
         model = ('deepseek-chat' if provider == 'deepseek'
                  else _clean('MODEL_JP_AUX', 'claude-haiku-4-5-20251001'))
 
+    # ★ v3: Provider 明确指定时,尊重用户选择(中转场景关键)
+    #   用户设 deepseek 就代表她想走 OpenAI 兼容接口(不管模型叫啥),
+    #   避免 claude-* 前缀被强制劫持到官方 Anthropic。
+    if provider == 'deepseek':
+        return _call_deepseek(model, messages, system, max_tokens, temperature)
+    if provider == 'claude':
+        return _call_anthropic(model, messages, system, max_tokens, temperature)
+
+    # ★ 未设 provider,按模型前缀分派(向下兼容旧用户)
     if model.startswith('claude-') or model.startswith('anthropic-'):
         return _call_anthropic(model, messages, system, max_tokens, temperature)
     # ★ deepseek / gemini / gemma / 其他 OpenAI 兼容接口都走同一条路
