@@ -9,9 +9,15 @@
 
 ★ 约束:忙碌时段一天不超过 4 小时、不超过 4 段。
     全天都忙的话用户就没得聊了,那不是陪伴 App 该有的样子。
+
+★ v2 修复:
+   - 走 MODEL_MAIN(动态读 settings),不再用静态 MODEL_CN_AUX
+     原因: 某些中转对 haiku 会路由到官方助手版本,拒绝角色扮演
+   - 加了显式 system 说明这是创意写作,进一步减少拒绝
 """
+import config
 from datetime import datetime, timedelta
-from config import CN_TZ, MODEL_CN_AUX
+from config import CN_TZ
 from characters import get_character
 # ★ pub 版没有 characters_data/ 文件夹（角色由用户在 App 里创建、存 DB），
 #   直接从 characters.get_character 拿 core_prompt 即可。
@@ -118,19 +124,35 @@ def generate_daily_schedule(character_id, user_id, target_date=None, force=False
 
     try:
         from ai_client import create_chat
+        # ★ 关键修复:走 MODEL_MAIN 而不是 MODEL_CN_AUX
+        #   - MODEL_MAIN 是主聊天用的模型,已经验证过能扮演角色不拒绝
+        #   - 某些中转服务对 haiku 系列会路由到"官方助手"定位版本,
+        #     那种版本安全对齐硬,收到 "你是{角色}" 会跳出来说
+        #     "I'm Claude made by Anthropic, I work as an AI assistant..."
+        #   - Opus 通过中转就正常扮演,而且日程一天才生成一次,成本可忽略
+        _model = config.get_setting('MODEL_MAIN') or 'claude-opus-4-6'
+
+        # ★ 显式加个 system 消息说明这是创意写作,减少拒绝概率
+        system_msg = (
+            '这是虚构角色扮演的创意写作任务。'
+            f'请为虚构角色 {char_name} 生成一天的日程安排(JSON 格式)。'
+            '不需要说明你是 Claude 或其他 AI,直接输出 JSON。'
+        )
+
         raw, _usage = create_chat(
-            model=MODEL_CN_AUX, max_tokens=3000,
+            model=_model, max_tokens=3000,
+            system=system_msg,
             messages=[{'role': 'user', 'content': prompt}],
         )
         raw = (raw or '').strip()
         if not raw:
-            print(f'[schedule] {character_id} 生成返回空')
+            print(f'[schedule] {character_id} 生成返回空 (model={_model})')
             return None
 
         from utils import extract_json
         parsed = extract_json(raw)
         if not parsed or not isinstance(parsed.get('schedule'), list):
-            print(f'[schedule] {character_id} 解析失败: {raw[:200]}')
+            print(f'[schedule] {character_id} 解析失败 (model={_model}): {raw[:200]}')
             return None
 
         items = _sanitize(parsed['schedule'], character_id)
