@@ -39,11 +39,8 @@
     ],
     "scheme": "gojosimple",
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "7279a2b9-eff4-4b1c-99c5-1c9350473d47"
-      }
+      "router": {}
     },
-    "owner": "ericakhor"
+    "owner": "改成自己的expo帐号"
   }
 }
