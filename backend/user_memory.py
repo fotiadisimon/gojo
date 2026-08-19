@@ -1,3 +1,24 @@
+# ═══════════════════════════════════════════════════════════════════
+# ★★★ 这份是【PUB 版】user_memory.py ★★★
+#
+# 用途:  推到 pub 项目 (你朋友的 fotiadisimon/gojo)
+# 路径:  你的_pub/backend/user_memory.py
+# 行数:  ~1164 行
+# 基底:  pub_update 增强版 (1157 行) + memory_fix 修复 + 时间阈值降到 10 分
+#
+# 包含:  ✅ merge_bond_memories 羁绊去重
+#        ✅ _loosely_matches / _too_similar / _bigrams 模糊匹配去重工具
+#        ✅ _norm_category 分类归一
+#        ✅ smart_recall 双向关联(fact ↔ bond)
+#        ✅ 动态 config.get_setting("MODEL_CN_AUX") — App 里改立即生效
+#        ✅ 默认 Haiku (claude-haiku-4-5-20251001)
+#        ✅ 时间阈值 10 分钟 (修凌晨 1:59 问抽血 bug)
+#
+# ⚠️  这份【不能】推到 backend 私仓
+#     — pub_update 的增强逻辑基于 pub 简版设计
+#     — backend 私仓有自己的原版, 用 BACKEND_PRIVATE_user_memory.py
+# ═══════════════════════════════════════════════════════════════════
+
 """用户记忆 v3（短期 + 长期 + 羁绊 + 统一三桶提取 + 自动纠错）
 
 记忆四层结构：
@@ -8,9 +29,10 @@
 
 提取只用一次 Haiku 调用，同时产出 1/2/3 三类，成本和原来一样。
 
-★ v3.1 修复 (记忆完全丢失 bug)：
+★ v3.1 修复 (记忆完全丢失 bug + 保留 v3 增强)：
    - 删除模块顶层 claude_client 单例（用的是导入时的空 key，永远认证失败）
    - 所有 MODEL_CN_AUX 引用改成 config.get_setting()，App 里改完立即生效
+   - 保留 v3 全部增强：merge_bond_memories、羁绊去重、smart_recall 集成
 """
 import config
 from datetime import datetime, timedelta, timezone
@@ -21,7 +43,7 @@ from character_relations import get_relations_text
 
 # ────────── 当前对话上下文范围（短期记忆喂给模型的部分）──────────
 SHORT_MEMORY_HOURS = 24   # 把最近这么多小时的对话当"当前上下文"（想要两天就改 48）
-SHORT_MEMORY_MAX   = 20   # 最多带这么多条，保护速度和 API 成本（嫌贵调小，想记更多调大）
+SHORT_MEMORY_MAX   = 40   # ★ 20→40:聊得多时 20 条只能覆盖两三小时,导致"11 小时前聊的机械体"被挤掉
 
 # ★ 跨角色共享的"用户事实"桶。
 SHARED_CHARACTER_ID = 'shared'
@@ -101,8 +123,12 @@ def get_short_memory(user_id, n=6, character_id=DEFAULT_CHARACTER_ID):
         if ts is not None:
             # 数据库存的是 UTC，换算到北京时间再判断
             ts_cn = ts.replace(tzinfo=timezone.utc).astimezone(CN_TZ)
-            gap_hours = (now - ts_cn).total_seconds() / 3600
-            if gap_hours >= 2:
+            gap_seconds = (now - ts_cn).total_seconds()
+            # ★ v3.2 修时间判断 bug:
+            #   老代码只在 ≥2h 时标时间戳,导致 13 分钟前说的晚安、
+            #   现在再打招呼,LLM 完全看不到时间差,可能误以为已经隔了一觉。
+            #   新阈值:超过 10 分钟就打时间戳。10 分钟内的快速对话保持自然。
+            if gap_seconds >= 600:   # 10 分钟
                 d = ts_cn.date()
                 if d == today:
                     day_label = '今天'
@@ -168,13 +194,9 @@ def save_long_memory(user_id, content, category=None, character_id=DEFAULT_CHARA
     )
     existing = cur.fetchall()
     for (e,) in existing:
-        if content == e:
+        if _too_similar(content, e):
             cur.close(); conn.close()
-            print(f'[{user_id}] 记忆完全重复，跳过：{content}')
-            return False
-        if abs(len(content) - len(e)) < 5 and (content in e or e in content):
-            cur.close(); conn.close()
-            print(f'[{user_id}] 记忆高度重复，跳过：{content}（已有：{e}）')
+            print(f'[{user_id}] 记忆重复，跳过：{content}（已有：{e}）')
             return False
     cur.execute(
         'INSERT INTO long_memory (user_id, character_id, content, category) VALUES (%s, %s, %s, %s) RETURNING id',
@@ -230,6 +252,85 @@ def delete_long_memory(memory_id):
 
 # ────────── 第 2/3 层：羁绊记忆（我们之间的事 / 她告诉我的事）──────────
 
+def _loosely_matches(a: str, b: str) -> bool:
+    """宽松匹配,只用于【找合并目标】,不用于去重。
+
+    LLM 在 bond_merge.replaces 里复述旧记忆时经常有出入,
+    严格匹配会让合并请求全部落空。这里放宽到"大致是那条"就行,
+    误配的风险由 merge_bond_memories 里"新内容不能比旧的短"那道防线兜住。
+    """
+    if not a or not b:
+        return False
+    ca, cb = _clean_for_compare(a), _clean_for_compare(b)
+    if not ca or not cb:
+        return False
+    if ca == cb or ca in cb or cb in ca:
+        return True
+    ga, gb = _bigrams(ca), _bigrams(cb)
+    if not ga or not gb:
+        return False
+    # 阈值 0.2:实测完全无关的记忆二元组重合都是 0.00,
+    # 而 LLM 复述同一条记忆最低也有 0.22 —— 中间空档很大,不会误配。
+    return len(ga & gb) / min(len(ga), len(gb)) >= 0.2
+
+
+def _too_similar(a: str, b: str) -> bool:
+    """判断两条记忆是不是【几乎一模一样】。
+
+    ★ 分工:
+      · 语义重复(意思一样但措辞不同)→ 交给提取器 LLM 判断。
+        它在 prompt 里能看到【已记录的羁绊记忆】和【已记录的她的事实】,
+        判断"这件事记过没有"是它的活,比数字符靠谱得多。
+      · 这个函数只拦【近乎完全相同】的:标点差异、多一个字、重复提交。
+
+    ★ 为什么阈值这么严:
+      之前设 0.62 想帮 LLM 兜底,结果误杀了真·新记忆——
+        「她今天在家改程序」vs「她今天因腰酸没改成程序」
+        单字重合 75% 被判重复,但这是两件事(一件在改,一件没改成)。
+      中文单字太容易撞。误删是永久丢失,漏拦只是多一条,
+      所以宁可让 LLM 去做语义判断,这里只做最后一道防线。
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+
+    ca, cb = _clean_for_compare(a), _clean_for_compare(b)
+    if not ca or not cb:
+        return False
+    if ca == cb:          # 只是标点/空格不同
+        return True
+
+    short, long_ = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
+    # 长度差超过 15% 就不算"几乎一样"
+    if len(short) / len(long_) < 0.85:
+        return False
+
+    # 单字几乎全同
+    char_ratio = sum(1 for ch in set(short) if ch in long_) / len(set(short))
+    if char_ratio < 0.95:
+        return False
+
+    # 二元组也几乎全同(保证语序一致,不是同样的字换个顺序)
+    ga, gb = _bigrams(ca), _bigrams(cb)
+    if not ga or not gb:
+        return True
+    return len(ga & gb) / min(len(ga), len(gb)) >= 0.9
+
+
+def _clean_for_compare(s: str) -> str:
+    """比较前去掉标点空白,只留实义字符。"""
+    punc = set('，。,.、！!？?「」：:；;“”‘’\'" \t\n——…')
+    return ''.join(ch for ch in s if ch not in punc)
+
+
+def _bigrams(s: str) -> set:
+    """相邻两字组成的集合。中文里二元组比单字更能代表语义。"""
+    if len(s) < 2:
+        return {s} if s else set()
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
 def save_bond_memory(user_id, character_id, kind, content):
     """kind='between'（我们之间）或 'told'（她告诉我的）。带去重。"""
     conn = get_conn()
@@ -240,20 +341,123 @@ def save_bond_memory(user_id, character_id, kind, content):
     )
     existing = cur.fetchall()
     for (e,) in existing:
-        if content == e or (abs(len(content) - len(e)) < 5 and (content in e or e in content)):
+        if _too_similar(content, e):
             cur.close(); conn.close()
-            print(f'[{user_id}] 羁绊记忆重复，跳过：{content}')
+            print(f'[{user_id}] 羁绊记忆重复，跳过：{content}（已有：{e}）')
             return False
     cur.execute(
         'INSERT INTO bond_memory (user_id, character_id, kind, content) VALUES (%s, %s, %s, %s) RETURNING id',
         (user_id, character_id, kind, content)
     )
     new_id = cur.fetchone()[0]
+
+    # ★ 两级召回：尝试关联到一条 long_memory
+    try:
+        from smart_recall import link_bond_to_fact
+        fact_id = link_bond_to_fact(user_id, character_id, content)
+        if fact_id:
+            cur.execute('UPDATE bond_memory SET linked_fact_id = %s WHERE id = %s',
+                        (fact_id, new_id))
+            print(f'[{user_id}] 🔗 bond #{new_id} 关联到 fact #{fact_id}')
+    except Exception:
+        pass  # 关联失败不影响存入
+
     conn.commit()
     cur.close()
     conn.close()
     _bg_embed('bond_memory', new_id, content)   # ★ RAG 启用时后台补向量
     return True
+
+
+def merge_bond_memories(user_id, character_id, kind, replaces, new_content):
+    """★ 记忆合并:把几条零散的旧记忆替换成一条更完整的。
+
+    场景:同一件事分几次聊,库里存成 3-5 条碎片
+      "她让我把尾巴改成可拆卸"
+      "她说要做Q版的"
+      "她说六眼要还原"
+    合并成:"她要给我做Q版手办:猫耳、尾巴可拆卸、六眼还原,资金到位要几个月"
+
+    安全限制(长期使用必须严格,删错东西比漏记更糟):
+      1. 一次最多替换 3 条
+      2. 每条 replaces 必须在库里真实存在(用相似度匹配,允许 LLM 复述有出入)
+      3. 新内容必须【不短于】被替换内容里最长的那条 —— 防止越合并信息越少
+      4. 匹配不到的 replaces 直接忽略,不影响其他条目
+      5. 全过程打日志,可追溯
+
+    返回 (是否成功, 实际删除条数)
+    """
+    if not new_content or not isinstance(replaces, list) or not replaces:
+        return False, 0
+    replaces = [r for r in replaces if isinstance(r, str) and r.strip()][:3]
+    if not replaces:
+        return False, 0
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            'SELECT id, content FROM bond_memory WHERE user_id=%s AND character_id=%s AND kind=%s',
+            (user_id, character_id, kind)
+        )
+        rows = cur.fetchall()
+
+        # 找出真实存在的目标。
+        # ★ 这里用【宽松匹配】,不用 _too_similar ——
+        #   LLM 复述旧记忆时常有出入(漏字、改标点、换语序),
+        #   严格匹配会导致合并请求全部落空。
+        #   宽松没关系:后面还有"不能信息缩水"那道防线兜着。
+        targets = []
+        for want in replaces:
+            best = None
+            for mid, mcontent in rows:
+                if mid in [t[0] for t in targets]:
+                    continue
+                if _loosely_matches(want, mcontent):
+                    best = (mid, mcontent)
+                    break
+            if best:
+                targets.append(best)
+            else:
+                print(f'[{user_id}] 合并:找不到要替换的旧记忆,跳过 →「{want[:30]}」')
+
+        if not targets:
+            cur.close(); conn.close()
+            return False, 0
+
+        # 防信息缩水:新内容不能比被替换的任何一条更短
+        longest_old = max(len(c) for _i, c in targets)
+        if len(new_content) < longest_old:
+            print(f'[{user_id}] ❌ 合并被拒:新内容({len(new_content)}字)比旧的({longest_old}字)还短,可能丢信息')
+            cur.close(); conn.close()
+            return False, 0
+
+        ids = [i for i, _c in targets]
+        cur.execute('DELETE FROM bond_memory WHERE id = ANY(%s)', (ids,))
+        deleted = cur.rowcount
+        cur.execute(
+            'INSERT INTO bond_memory (user_id, character_id, kind, content) VALUES (%s,%s,%s,%s) RETURNING id',
+            (user_id, character_id, kind, new_content)
+        )
+        new_id = cur.fetchone()[0]
+        conn.commit()
+
+        for _i, old in targets:
+            print(f'[{user_id}] 🔗 合并吸收:「{old[:40]}」')
+        print(f'[{user_id}] ✅ 合并完成 #{new_id}(替换 {deleted} 条):{new_content}')
+    finally:
+        cur.close()
+        conn.close()
+
+    _bg_embed('bond_memory', new_id, new_content)
+    # ★ 合并删掉了旧条目,通知检索层清缓存,免得捞到已经不存在的记忆
+    try:
+        import memory_search
+        if memory_search.is_vector_ready():
+            memory_search.invalidate_cache('bond_memory')
+    except Exception:
+        pass
+    return True, deleted
 
 
 def get_bond_memories(user_id, character_id, kind=None, limit=30):
@@ -394,7 +598,6 @@ def correct_memories(user_id, user_text, character_id=DEFAULT_CHARACTER_ID):
         weekday_cn = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][now.weekday()]
 
         # ★ 纠错扫描:纯中文结构化任务,走 MODEL_CN_AUX
-        # ★ v3.1: 动态读 settings —— App 里改完立即生效,默认 deepseek-chat
         from ai_client import create_chat
         _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         correction_prompt = f'''你是记忆纠错助手。用户正在纠正自己之前说过的错误信息，你要找出哪些旧记忆需要删除。
@@ -422,7 +625,7 @@ def correct_memories(user_id, user_text, character_id=DEFAULT_CHARACTER_ID):
 要删除：{{"action":"delete","ids":[1,2]}}
 不删除：{{"action":"none","ids":[]}}'''
         raw, _usage = create_chat(
-            model=_model, max_tokens=300,
+            model=_model, max_tokens=1500,
             messages=[{'role': 'user', 'content': correction_prompt}],
         )
         raw = raw.strip()
@@ -469,14 +672,24 @@ def _clean_content(raw_content):
     return (raw_content or '').strip().strip('「」"\'').rstrip('。.')
 
 
-def _valid_user_fact(user_id, content, char_names):
-    """用户事实：必须"她"开头、不含任何角色名（角色相关的应归入 bond/told）。"""
-    if not content or content == '无' or len(content) < 4:
+def _valid_user_fact(user_id, content, char_names, category=''):
+    """用户事实：必须"她"开头、不含任何角色名（角色相关的应归入 bond/told）。
+
+    ★ 修复:
+      - 原来 len<4 会【静默】丢弃,"她叫琳"(3字)直接消失且没有日志 → 降到 3 并打日志
+      - 原来任何含角色名的都拒 → 但"她让五条悟叫她琳"这种【称呼类身份信息】
+        天然会带角色名,不该被拒。category='身份' 时豁免角色名检查。
+    """
+    if not content or content == '无':
+        return False
+    if len(content) < 3:
+        print(f'[{user_id}] ❌ user_fact 拒绝（太短 {len(content)} 字）：{content}')
         return False
     if not content.startswith('她'):
         print(f'[{user_id}] ❌ user_fact 拒绝（非"她"开头）：{content}')
         return False
-    forbidden = ['AI', 'ai', '机器人'] + char_names
+    # ★ 身份类(名字/称呼)豁免角色名检查——"她让我叫她琳"这种必然会提到角色
+    forbidden = ['AI', '机器人'] if category == '身份' else (['AI', '机器人'] + char_names)
     for word in forbidden:
         if word and word in content:
             print(f'[{user_id}] ❌ user_fact 拒绝（含违禁词 {word}）：{content}')
@@ -507,7 +720,28 @@ def _valid_told(user_id, content):
     return True
 
 
-VALID_CATS = ('喜好', '厌恶', '身份', '状态', '经历', '关系', '其他')
+VALID_CATS = ('喜好', '厌恶', '身份', '状态', '经历', '关系', '健康', '其他')
+
+# 模型爱自创分类名,映射到合法值,别一律降级成"其他"
+CAT_ALIAS = {
+    '健康状况': '健康', '身体': '健康', '身体状况': '健康', '疾病': '健康', '病史': '健康',
+    '情绪': '状态', '近况': '状态', '当前状态': '状态',
+    '爱好': '喜好', '兴趣': '喜好', '偏好': '喜好',
+    '讨厌': '厌恶', '反感': '厌恶',
+    '个人信息': '身份', '基本信息': '身份', '职业': '身份', '专业': '身份',
+    '人际': '关系', '人际关系': '关系',
+    '往事': '经历', '过去': '经历',
+}
+
+
+def _norm_category(cat: str) -> str:
+    """把模型输出的分类名归一化到合法值。"""
+    cat = (cat or '').strip()
+    if cat in VALID_CATS:
+        return cat
+    if cat in CAT_ALIAS:
+        return CAT_ALIAS[cat]
+    return '其他'
 
 
 # ────────── ★ 统一三桶提取（私聊）──────────
@@ -545,7 +779,6 @@ def extract_and_save_memory(user_id, user_text, assistant_text, character_id=DEF
         relations_intro = (f'\n{relations_block}\n' if relations_block else '')
 
         # ★ 记忆提取:纯中文结构化任务,走 MODEL_CN_AUX(默认 deepseek-chat 便宜好用)
-        # ★ v3.1: 动态读 settings —— App 里改完立即生效
         from ai_client import create_chat
         _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         prompt_content = f'''你是记忆整理助手。从下面这轮对话中提取值得长期记住的信息，分成三类。
@@ -583,6 +816,28 @@ C. told：她告诉{char_name}的、关于{char_name}本人或他的世界的信
    - 只有当她明确在陈述这类信息时才提取；她提问、开玩笑不算。
 
 【通用规则】
+
+0. ★★【必抓清单——优先级最高,凌驾于下面所有"别记"的规则】★★
+   以下这些是【她这个人的核心信息】,一旦出现就【必须记】,不受第 3/7/8/12 条限制:
+
+   ▸ 【姓名 / 昵称 / 希望被怎么称呼】——最高优先级
+     · "我叫XXX" / "你可以叫我XXX" / "我的小名是XXX" / "别叫我XXX,叫我YYY"
+     · 记成:"她叫XXX"、"她希望被叫做XXX"、"她的小名是XXX"
+     · ★ 就算她只说过一次,也【必须记】——名字不是"一次分享",是身份本身
+     · ★ 就算她是笑着说的、随口说的、夹在别的话里说的,也【必须记】
+   ▸ 【生日 / 年龄】:"我生日是X月X日"、"我今年X岁"
+   ▸ 【居住地 / 家乡】:"我在XX""我老家在XX"
+   ▸ 【职业 / 学业】:她【明确陈述】自己的工作或专业(不是从一次分享推断)
+   ▸ 【重要家人关系】:"我妈妈""我弟弟"这类她主动提到的直系亲属
+   ▸ 【重大健康状况 / 长期困扰】:她明说的、会持续影响她的事
+   ▸ 【明确表达的强烈喜好或厌恶】:"我最讨厌XX""我超喜欢XX"(注意是她【明说】的,不是你推断的)
+
+   【判断方法】问自己:"如果她下次问'我叫什么名字',我答不上来会不会很奇怪?"
+   会 → 这条必须记。
+
+   ⚠️ 这一条是【白名单】,命中就记,不要再拿第 3 条(简单回应不算)、
+   第 8 条(大多数都是 null)、第 12 条(一次分享不算身份)去否决它。
+
 1. 【事实只信她】：user_fact 和 told 只能从"她说"里提取，{char_name}的回复绝不作为这两类的来源。
 2. 【我的话记成我的】：{char_name}（也就是"我"）的重要表态可以记入 bond，写成"我说过/我认为/我答应了…"，
    绝不写成"她说过"。我随口报的数字、天数、结论（如"我们认识35天了"）多半只是顺着聊，一般不值得记；
@@ -591,10 +846,37 @@ C. told：她告诉{char_name}的、关于{char_name}本人或他的世界的信
 4. "确认了认识多少天"这类元对话不要提取；"讨论了是什么关系"只有当某一方给出了值得记住的正式表态时才记，且主语写对。
 5. 时间换算成绝对日期："明天"→{tomorrow_str}，"昨天"→{yesterday_str}。
 6. user_fact 和 told 必须以"她"开头；bond 以"我""我们"或"她"开头（第一人称，"我"={char_name}）。
-7. 与已记录内容重复或【意思相近】的，绝不再提——宁可漏记不可重复。
+7. ★★【查重是你的活——每次输出前都要对照上面的已记录列表】★★
+   系统只拦【一字不差】的重复,【意思一样但换了说法】必须由你来判断。
+
+   【判断方法】把要写的内容和上面【已记录的...】逐条对照,问自己:
+     "这条如果加进去,会不会让人觉得同一件事记了两遍?"
+     会 → 填 null(或者用 bond_merge 合并)
+     不会 → 正常输出
+
+   【★ 关键:别把"看起来像"当成"是同一件事"】
+   下面这些【字面很像但是不同的事】,必须照常记:
+     · 已有「她今天在家改程序」← 新的「她因腰酸没改成程序」
+       → 【不同】:一件是在改,一件是没改成。要记。
+     · 已有「她说要买手办」← 新的「她说手办涨价了不买了」
+       → 【不同】:计划变了。要记。
+     · 已有「她昨天熬夜」← 新的「她今天早睡了」
+       → 【不同】:是新的状态。要记。
+   判断看【说的是不是同一件事实】,不是看用了多少相同的字。
+
+   【真正该跳过的重复长这样】
+     · 已有「她主动给我起了昵称琳」← 新的「她给了我专属称呼琳」
+       → 【同一件事】,换了个说法而已 → null
+     · 已有「她学计算机专业」← 新的「她是学计算机的」
+       → 【同一件事】→ null
+
+   【状态类记忆的特殊规则】
+   「她今天在改程序」这种带时间的状态,第二天又聊到时【要记新的】,
+   不要因为"上次记过改程序"就跳过 —— 状态会变,记录的是不同时刻的她。
 7.5 所有记忆都必须是【简短的一句话】（30 字以内），只记事实和事件本身。
     禁止引用原文对话、禁止附翻译、禁止补充解说和背景铺垫——那是聊天记录该干的事，不是记忆。
-8. 某类没有就填 null（大多数日常对话三类都是 null，这很正常）。
+8. 某类没有就填 null。日常闲聊确实多数是 null,这很正常——
+   【但如果命中了第 0 条必抓清单,就绝不能填 null】。
 9. 【必须分清"她自己"和"她转述的别人"——非常重要】：
    她说的话里，有些是关于她本人，有些是她在讲【别人】（她的朋友、同学、同事、家人等）的事。
    - 只有【明确是她本人】的事，才提取成 user_fact。
@@ -639,6 +921,10 @@ C. told：她告诉{char_name}的、关于{char_name}本人或他的世界的信
     - 关系表里没有的名字 → 直接用原名,别猜(例:"她说小张是叛徒" → "她说小张是叛徒",别改成"她说朋友是叛徒")
 
 12. ★【一次分享 ≠ 身份特征——非常重要】
+    ⚠️ 【例外】:第 0 条必抓清单里的内容(名字/称呼/生日/居住地等)【不受本条限制】——
+    她说一次名字就要记名字,那不是"推断",那是她【直接告诉你的事实】。
+    本条只针对【你自己推断出来的】身份特征。
+
     她**发了一次某样东西 / 提了一句某件事**,只能提取那**一次的行为**,不能扩展成【她是 X】这种身份/专业/长期状态的判断。
     -  ❌ 错误(过度推断):
       · 她发了一张芙莉莲的图 → "她喜欢芙莉莲"
@@ -654,20 +940,73 @@ C. told：她告诉{char_name}的、关于{char_name}本人或他的世界的信
       她只是【单次分享/提及】 → 只能记"她今天分享了/提了 XX"。
     - 【禁止】把一次分享推断成【爱好/习惯/身份】,那是言情小说主角推断女主的写法,不是记忆整理。
 
+13. ★★【记忆合并——把碎片收拢成完整的一条】★★
+    同一件事常常分好几次聊,库里就会留下一堆碎片:
+      「她让我把尾巴改成可拆卸」
+      「她说要做Q版的」
+      「她说六眼要还原」
+    ——这三条其实是【同一件事】的三个片段。
+
+    当这轮对话【把一件旧事补充完整了】、或者【某一方完整复述了一遍】时,
+    输出 bond_merge 字段,把碎片合并成一条完整的。
+
+    【使用条件——都满足才输出】
+    · 【已记录的羁绊记忆】里确实存在这些碎片(replaces 要抄那边的原文,不能凭空编)
+    · 这轮对话让这件事变完整了(补了新细节 / 有人完整总结了一遍)
+    · 合并后的内容【包含】所有碎片的信息,不能越合越少
+
+    【限制】
+    · replaces 最多 3 条
+    · content 必须比任何一条碎片都更完整(更长、信息更全)
+    · 拿不准就别合并,输出 null —— 漏合并只是效率问题,错误合并会【丢失记忆】
+
+    【正例】
+    她吐槽"说好要做机器人形体和可拆卸尾巴结果都没记住",
+    我回"全都记着:Q版、猫耳、尾巴可拆卸、六眼还原,资金要几个月" →
+    bond_merge 的 replaces 填 ["她夸我可爱的样子,我嘴上否认但让她把尾巴改成可拆卸"],
+    content 填 "她要给我做Q版手办:猫耳、尾巴可拆卸、六眼还原,资金到位要几个月"
+
+    【反例——不要合并】
+    · 只是又提了一次同一件事,没有新信息 → null(交给去重就行)
+    · 两件不同的事凑一起 → null
+    · 记不清旧记忆原文 → null
+
 【输出格式——严格 JSON，只输出一行】
-{{"user_fact":{{"content":"她XXX","category":"喜好"}},"bond":{{"content":"我和她XXX 或 我说过XXX 或 她对我XXX"}},"told":{{"content":"她说过XXX"}}}}
+{{"user_fact":{{"content":"她XXX","category":"喜好"}},"bond":{{"content":"我和她XXX 或 我说过XXX 或 她对我XXX"}},"told":{{"content":"她说过XXX"}},"bond_merge":{{"replaces":["旧记忆原文"],"content":"合并后的完整版"}}}}
 没有的类填 null，例如全都没有：
-{{"user_fact":null,"bond":null,"told":null}}
-category 只能选：喜好/厌恶/身份/状态/经历/关系/其他'''
+{{"user_fact":null,"bond":null,"told":null,"bond_merge":null}}
+category 只能选：喜好/厌恶/身份/状态/健康/经历/关系/其他'''
         raw, _usage = create_chat(
-            model=_model, max_tokens=400,
+            model=_model, max_tokens=2000,
             messages=[{'role': 'user', 'content': prompt_content}],
         )
         raw = raw.strip()
-        print(f'[{user_id}][{character_id}] {_model}: {raw[:150]}')
+        print(f'[{user_id}][{character_id}] 提取器({_model}) 完整输出: {raw}')
 
         parsed = extract_json(raw)
+
+        # ★ 解析失败重试一次:一次抽风就丢掉整轮记忆太亏。
+        #   重试时加一句硬约束,压掉推理模型的思考冲动。
         if not parsed:
+            print(f'[{user_id}] ⚠️ 首次解析失败,重试一次...')
+            try:
+                raw2, _u2 = create_chat(
+                    model=_model, max_tokens=2000,
+                    messages=[{
+                        'role': 'user',
+                        'content': prompt_content +
+                        '\n\n【⚠️ 重要】不要输出任何思考过程、解释、markdown 代码块标记。'
+                        '直接输出那一行 JSON,第一个字符必须是 {,最后一个字符必须是 }。'
+                    }],
+                )
+                raw2 = raw2.strip()
+                print(f'[{user_id}] 重试输出: {raw2}')
+                parsed = extract_json(raw2)
+            except Exception as _re:
+                print(f'[{user_id}] 重试也失败:{_re}')
+
+        if not parsed:
+            print(f'[{user_id}] ❌ 提取器输出无法解析成 JSON,本轮记忆全丢: {raw[:200]}')
             return
 
         # A. 用户事实 → shared 桶
@@ -675,12 +1014,28 @@ category 只能选：喜好/厌恶/身份/状态/经历/关系/其他'''
         if isinstance(uf, dict):
             content = _clean_content(uf.get('content'))
             category = (uf.get('category') or '其他').strip()
-            if category not in VALID_CATS:
-                category = '其他'
-            if _valid_user_fact(user_id, content, char_names):
+            category = _norm_category(category)
+            if _valid_user_fact(user_id, content, char_names, category):
                 # ★ 单聊里说的只有这个角色知道（谁在场谁知道）；群聊说的才进 shared
                 if save_long_memory(user_id, content, category, character_id):
                     print(f'[{user_id}] ✅ 用户事实 [{category}]（{character_id} 专属）：{content}')
+
+        # ★ B0. 记忆合并:先处理,把碎片收成一条(放在新增之前,避免刚存的又被合掉)
+        bm = parsed.get('bond_merge')
+        if isinstance(bm, dict):
+            merge_content = _clean_content(bm.get('content'))
+            merge_replaces = bm.get('replaces')
+            if merge_content and isinstance(merge_replaces, list):
+                if _valid_bond(user_id, merge_content, char_name):
+                    try:
+                        merge_bond_memories(
+                            user_id, character_id, 'between',
+                            merge_replaces, merge_content
+                        )
+                    except Exception as _e:
+                        print(f'[{user_id}] ❌ 记忆合并出错(不影响其他记忆):{_e}')
+                else:
+                    print(f'[{user_id}] ❌ 合并内容格式不合规,跳过:{merge_content[:40]}')
 
         # B. 我们之间的事 → bond_memory(between)
         bd = parsed.get('bond')
@@ -697,6 +1052,13 @@ category 只能选：喜好/厌恶/身份/状态/经历/关系/其他'''
             if _valid_told(user_id, content):
                 if save_bond_memory(user_id, character_id, 'told', content):
                     print(f'[{user_id}] ✅ 告知记忆（{character_id}）：{content}')
+
+        # ★ 两级召回：强化被提起的记忆（mention_count + 1）
+        try:
+            from smart_recall import reinforce_mentioned_facts
+            reinforce_mentioned_facts(user_id, character_id, user_text)
+        except Exception:
+            pass
 
     except Exception as e:
         print(f'记忆提取失败：{e}')
@@ -732,7 +1094,6 @@ def extract_and_save_group_memory(user_id, user_text, round_transcript, members)
         existing_text = '\n'.join(f'- {m[0]}' for m in existing) if existing else '（暂无）'
 
         # ★ 群聊记忆提取:纯中文结构化任务,走 MODEL_CN_AUX
-        # ★ v3.1: 动态读 settings —— App 里改完立即生效
         from ai_client import create_chat
         _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         group_prompt = f'''你是记忆整理助手。下面是一个群聊的一轮对话记录。
@@ -776,9 +1137,9 @@ C. char_bonds：这一轮里发生的、值得【某个角色】记进自己回�
 
 【输出格式——严格 JSON，只输出一行】
 {{"user_fact":{{"content":"她XXX","category":"喜好"}},"told":{{"target":"角色名","content":"她说过XXX"}},"char_bonds":[{{"target":"角色名","content":"我XXX"}}]}}
-没有的类填 null（char_bonds 没有就填 []）。category 只能选：喜好/厌恶/身份/状态/经历/关系/其他'''
+没有的类填 null（char_bonds 没有就填 []）。category 只能选：喜好/厌恶/身份/状态/健康/经历/关系/其他'''
         raw, _usage = create_chat(
-            model=_model, max_tokens=350,
+            model=_model, max_tokens=2000,
             messages=[{'role': 'user', 'content': group_prompt}],
         )
         raw = raw.strip()
@@ -793,8 +1154,7 @@ C. char_bonds：这一轮里发生的、值得【某个角色】记进自己回�
         if isinstance(uf, dict):
             content = _clean_content(uf.get('content'))
             category = (uf.get('category') or '其他').strip()
-            if category not in VALID_CATS:
-                category = '其他'
+            category = _norm_category(category)
             if _valid_user_fact(user_id, content, char_names_all):
                 if save_long_memory(user_id, content, category, SHARED_CHARACTER_ID):
                     print(f'[{user_id}][group] ✅ 用户事实 [{category}]：{content}')

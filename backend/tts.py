@@ -101,6 +101,15 @@ def fish_tts(text: str, emotion: str = '平静', voice_id: str = None) -> bytes:
     if not fish_key:
         raise Exception('FISH_KEY 未配置')
 
+    # ★ 修:去掉开头的省略号/连续句号,Fish 会把它读成怪声
+    #   开头的 "。。。。。。" / "……" / "..." / "・・・" → 静音处理
+    #   长句中间的省略号保留(Fish 会自然停顿,不会发怪声)
+    import re as _re
+    text = _re.sub(r'^\s*[。．\.…・]{2,}\s*', '', text).strip()
+    if not text:
+        # 整条内容全是省略号,合成一段极短的空气 —— 直接抛异常让上层跳过
+        raise Exception('TTS 内容为空(全是省略号)')
+
     # ★ 不再往文字里塞 tag —— Fish 会念出来。只保留 "。 " 做暖场,避开首字被切
     final_text = f'。 {text}'
 

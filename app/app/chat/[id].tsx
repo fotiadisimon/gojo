@@ -1006,17 +1006,22 @@ export default function ChatRoom() {
 
   const handleSend = () => {
     if (loading) return;
-    if (pendingImage) {
-      const caption = inputText.trim();
-      const img = pendingImage;
-      setPendingImage(null);
-      setInputText('');
-      if (searchMode) { setSearchMode(false); setSearchQuery(''); }
-      sendImage(img.base64, img.mediaType, img.uri, caption,
-                img.isVideo && img.frames ? { frames: img.frames } : undefined);
-    } else {
-      sendText();
-    }
+    // ★ 修中文拼音输入法丢字("猫砂"没上屏就发出去)——
+    //   先收键盘强迫 IME commit 候选字,等一小下让 state 拿到完整文本
+    Keyboard.dismiss();
+    setTimeout(() => {
+      if (pendingImage) {
+        const caption = inputText.trim();
+        const img = pendingImage;
+        setPendingImage(null);
+        setInputText('');
+        if (searchMode) { setSearchMode(false); setSearchQuery(''); }
+        sendImage(img.base64, img.mediaType, img.uri, caption,
+                  img.isVideo && img.frames ? { frames: img.frames } : undefined);
+      } else {
+        sendText();
+      }
+    }, 50);
   };
 
   const clearHistory = () =>

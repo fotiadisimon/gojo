@@ -37,7 +37,7 @@ export const WEEKDAYS = ['日','一','二','三','四','五','六'];
 export const MONTHS = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-export const DEFAULT_SERVER_URL = '';
+export const DEFAULT_SERVER_URL = 'https://gojopub.zeabur.app';
 
 export let SERVER_URL = DEFAULT_SERVER_URL;
 
@@ -52,16 +52,27 @@ export const setServerUrl = async (url: string) => {
 /** ★ App 启动时 await 调用一次，把存的配置恢复出来 */
 export async function loadAppConfig() {
   try {
-    const [s, u] = await Promise.all([
+    const [s, u, uAlt] = await Promise.all([
       AsyncStorage.getItem('server_url'),
       AsyncStorage.getItem('user_id'),
+      AsyncStorage.getItem('gojo_user_id'),   // ★ 首页/记账/日程读的是这个 key
     ]);
     if (s) SERVER_URL = s;
-    if (u) {
-      FIXED_USER_ID = u;
+    // ★ 修 user_id key 不一致的 bug:
+    //   theme.ts 老代码存 'user_id',但 index.tsx / accounting.tsx / calendar.tsx
+    //   读的是 'gojo_user_id' —— 两个不同的 key,导致首页永远 fallback 到默认
+    //   FIXED_USER_ID,查出来 stats = 0。
+    //   修法:两个 key 都读,取最优的那个;然后写回两个 key 保持同步。
+    const chosen = u || uAlt;
+    if (chosen) {
+      FIXED_USER_ID = chosen;
+      // 补齐缺的那个 key
+      if (!u)     await AsyncStorage.setItem('user_id', chosen);
+      if (!uAlt)  await AsyncStorage.setItem('gojo_user_id', chosen);
     } else {
       const newId = 'user_' + Math.random().toString(36).slice(2, 14);
       await AsyncStorage.setItem('user_id', newId);
+      await AsyncStorage.setItem('gojo_user_id', newId);   // ★ 同时写双 key
       FIXED_USER_ID = newId;
     }
   } catch (e) {
