@@ -14,50 +14,23 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, SERVER_URL, FIXED_USER_ID, DEFAULT_SERVER_URL, setServerUrl } from '../../constants/theme';
 
 // 所有可改字段（要和后端 route_settings.py 的 ALLOWED 对齐）
+// ★ v4: hint 改成"功能描述"而不是具体模型名,减少用户困惑
 const FIELDS = [
-  { key: 'ANTHROPIC_KEY',     label: 'Claude API Key',    secret: true,  hint: 'sk-ant-...' },
-  { key: 'MODEL_MAIN',        label: 'Claude 主模型',      hint: 'claude-sonnet-4-5-20250929' },
-  { key: 'MODEL_JP_AUX',      label: 'Claude 辅助模型',    hint: 'claude-haiku-4-5-20251001' },
-  { key: 'DEEPSEEK_KEY',      label: 'DeepSeek / Gemini Key', secret: true, hint: '两者共用这一栏' },
-  { key: 'DEEPSEEK_MODEL',    label: '模型名',             hint: 'deepseek-chat 或 gemini-3.6-flash' },
-  { key: 'DEEPSEEK_BASE_URL', label: 'Base URL',          hint: 'https://api.deepseek.com' },
-  { key: 'MODEL_CN_AUX',      label: '后台任务模型',       hint: '记忆提取/日记生成用。推荐 claude-haiku-4-5-20251001（准确+便宜）；DeepSeek 记忆效果一般不推荐' },
-  { key: 'FISH_KEY',          label: 'Fish Audio Key',    secret: true,  hint: 'sk-fish-...' },
-  { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',      hint: '角色没单独配音色时用这个' },
+  { key: 'ANTHROPIC_KEY',     label: 'Claude API Key',        secret: true, hint: '直连 Claude 官方或中转 Anthropic 端点用' },
+  { key: 'MODEL_MAIN',        label: '主聊天模型',              hint: '聊天正文用,推荐用最好的模型(如 Opus/Sonnet)' },
+  { key: 'MODEL_JP_AUX',      label: '日语辅助模型',            hint: '日语小任务(纠正/术语)用,便宜快的即可' },
+  { key: 'DEEPSEEK_KEY',      label: '中转 / OpenAI 兼容 Key', secret: true, hint: '走 OpenAI 兼容路径的 key (DeepSeek 官方 / tdyun / oneapi / anyrouter 等中转)' },
+  { key: 'DEEPSEEK_MODEL',    label: '中转模型名',              hint: '中转支持的模型名,可以是任何名字 (如 claude-opus-4-6 / deepseek-chat)' },
+  { key: 'DEEPSEEK_BASE_URL', label: '中转 Base URL',          hint: '中转的地址,如 https://tdyun.ai/v1 / https://api.deepseek.com' },
+  { key: 'MODEL_CN_AUX',      label: '后台任务模型',            hint: '记忆提取/日记生成用。推荐 claude-haiku-4-5-20251001 (准确+便宜)' },
+  { key: 'FISH_KEY',          label: 'Fish Audio Key',        secret: true, hint: '语音 TTS 用,不用语音就不填' },
+  { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',          hint: '角色没单独配音色时用这个' },
 ] as const;
 
 const SECRET_KEYS = FIELDS.filter(f => (f as any).secret).map(f => f.key) as string[];
 
-// 一键预设
-const PRESETS = [
-  {
-    name: 'DeepSeek',
-    values: {
-      LLM_PROVIDER: 'deepseek',
-      DEEPSEEK_MODEL: 'deepseek-chat',
-      DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
-      MODEL_CN_AUX: 'deepseek-chat',
-    },
-  },
-  {
-    name: 'Gemini',
-    values: {
-      LLM_PROVIDER: 'deepseek',   // 借用 DeepSeek 通道（OpenAI 兼容）
-      DEEPSEEK_MODEL: 'gemini-3.6-flash',
-      DEEPSEEK_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      MODEL_CN_AUX: 'gemini-3.6-flash',
-    },
-  },
-  {
-    name: 'Claude',
-    values: {
-      LLM_PROVIDER: 'claude',
-      MODEL_MAIN: 'claude-sonnet-4-5-20250929',
-      MODEL_JP_AUX: 'claude-haiku-4-5-20251001',
-      MODEL_CN_AUX: 'claude-haiku-4-5-20251001',
-    },
-  },
-];
+// ★ v4: 砍掉了原来的 PRESETS 快速切换(DeepSeek/Gemini/Claude 一键填模型)
+//    保留下面的 provider 单选,让用户自己按需填 API 配置
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -136,11 +109,6 @@ export default function SettingsScreen() {
     }
   };
 
-  const applyPreset = (values: Record<string, string>) => {
-    setForm(prev => ({ ...prev, ...values }));
-    Alert.alert('已填入', '记得填 API Key，然后点最下面的保存');
-  };
-
   const save = async () => {
     // ★ 关键修复：提交所有"有值且和服务端不同"的字段
     //   不再依赖 localEdits，避免输入没被记录导致提交 0 项
@@ -215,23 +183,10 @@ export default function SettingsScreen() {
           </View>
         ) : (
           <>
-            {/* ── 一键预设 ── */}
+            {/* ── 选 Provider（走 Claude 官方还是 OpenAI 兼容中转）── */}
             <View style={s.card}>
-              <Text style={s.cardTitle}>快速切换</Text>
-              <Text style={s.hint}>点一下自动填好模型和地址，然后补 API Key</Text>
-              <View style={s.presetRow}>
-                {PRESETS.map(p => (
-                  <TouchableOpacity
-                    key={p.name}
-                    style={s.presetBtn}
-                    onPress={() => applyPreset(p.values as any)}
-                  >
-                    <Text style={s.presetText}>{p.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={[s.fieldLabel, { marginTop: 14 }]}>当前 Provider</Text>
+              <Text style={s.cardTitle}>当前 Provider</Text>
+              <Text style={s.hint}>决定请求走哪条路 —— 只影响不带 provider 前缀的请求</Text>
               <View style={s.providerRow}>
                 {['claude', 'deepseek'].map(p => (
                   <TouchableOpacity
@@ -240,13 +195,14 @@ export default function SettingsScreen() {
                     onPress={() => setVal('LLM_PROVIDER', p)}
                   >
                     <Text style={[s.providerBtnText, provider === p && { color: '#fff', fontWeight: '700' }]}>
-                      {p}
+                      {p === 'claude' ? 'Claude 官方直连' : 'OpenAI 兼容 / 中转'}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
               <Text style={s.hint}>
-                用 Gemini 时也选 deepseek —— 它走的是同一套 OpenAI 兼容接口
+                · 用 Claude 官方 → 选 claude,填 Claude API Key{'\n'}
+                · 用 DeepSeek 官方 / 用中转(tdyun/oneapi等) / 用 Gemini → 选 deepseek,填中转 Base URL 和 Key
               </Text>
             </View>
 

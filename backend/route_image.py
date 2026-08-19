@@ -7,22 +7,24 @@
 ★ 记账升级：LLM 返回 pending_transaction 时,后端只透传给前端(不写库),
   由前端确认卡引导用户核对后再 POST /accounting/records 落库。
 
-★ v2 修复 (图片识别完全失败 bug)：
-  - 删除模块顶层 claude_client 单例（用的是导入时的空 key，永远认证失败）
-  - claude_client.messages.create 改用 ai_client.create_chat，动态读 App 里填的 key
-  - MODEL_MAIN 改用 config.get_setting()，App 里改完立即生效
+★ v3 修图片识别 401 bug:
+  - 删除模块顶层 claude_client 单例(用启动时空 ANTHROPIC_KEY,永远认证失败)
+  - 每次调用时新建 client,从 App settings 动态读 ANTHROPIC_KEY
+  - 保留 anthropic SDK 直调(图片格式必须 Anthropic 格式,不走 ai_client 的 OpenAI 兼容路径)
+  - anthropic SDK 会自动读 ANTHROPIC_BASE_URL 环境变量,支持中转
 """
+import os
 import threading
+import anthropic
 import config
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from ai_client import create_chat
 from config import EMOTIONS, TTS_PROVIDER, DEFAULT_CHARACTER_ID
 from db import get_conn
 from utils import extract_json, sanitize_jp, merge_only_extreme_short
 from tts import tts_to_b64
-from prompt import build_system_blocks
+from prompt import build_system_blocks, log_cache_usage
 from user_memory import (
     save_short_memory, get_short_memory,
     update_chat_days, extract_and_save_memory
@@ -36,6 +38,20 @@ from tasks import (
 from task_dedup import find_similar_task   # ★ 模糊去重：同时段+意思相近就算同一件事
 
 router = APIRouter()
+
+
+def _get_claude_client():
+    """★ 每次调用取当前 ANTHROPIC_KEY(优先 App settings,后备 env var)
+    anthropic SDK 会自动读 ANTHROPIC_BASE_URL env var,所以中转/直连都支持"""
+    key = config.get_setting('ANTHROPIC_KEY') or os.getenv('ANTHROPIC_KEY') or ''
+    if not key:
+        raise Exception('ANTHROPIC_KEY 未配置(去 App 设置里填 Claude API Key)')
+    return anthropic.Anthropic(api_key=key)
+
+
+def _get_main_model():
+    """★ 主模型也动态读,App 里改立即生效"""
+    return config.get_setting('MODEL_MAIN') or os.getenv('MODEL_MAIN') or 'claude-opus-4-6'
 
 
 # ★ 记账透传辅助:只做基本形状校验,不写库(前端确认后 POST /accounting/records)
@@ -155,20 +171,21 @@ async def chat_image(data: dict):
     system_blocks = build_system_blocks(user_id, character_id, recall_query)
 
     # ── 调用 Claude Vision ──
-    # ★ v2: 从 ai_client.create_chat 走,动态读 App 里填的 ANTHROPIC_KEY 和 MODEL_MAIN
-    _model = config.get_setting('MODEL_MAIN') or 'claude-opus-4-6'
+    # ★ v3: 每次调用现取 client + model,读 App 里最新配置
+    _client = _get_claude_client()
+    _model = _get_main_model()
     result = None
     for attempt in range(5):
         try:
-            raw, _usage = create_chat(
+            response = _client.messages.create(
                 model=_model,
                 max_tokens=800,
                 system=system_blocks,
                 messages=messages,
             )
-            raw = raw.strip()
-            print(f'[{user_id}][{character_id}] image attempt {attempt+1} ({_model}) '
-                  f'in={_usage.get("input_tokens",0)} out={_usage.get("output_tokens",0)}: {raw[:120]}...')
+            log_cache_usage(f'image:{character_id}', response)
+            raw = response.content[0].text.strip()
+            print(f'[{user_id}][{character_id}] image attempt {attempt+1} ({_model}): {raw[:120]}...')
             parsed = extract_json(raw)
             if parsed and isinstance(parsed.get('messages'), list) and len(parsed['messages']) > 0:
                 if all(m.get('jp', '').strip() and m.get('zh', '').strip() for m in parsed['messages']):
