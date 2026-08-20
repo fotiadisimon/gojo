@@ -41,11 +41,36 @@ router = APIRouter()
 
 
 def _get_claude_client():
-    """★ 每次调用取当前 ANTHROPIC_KEY(优先 App settings,后备 env var)
-    anthropic SDK 会自动读 ANTHROPIC_BASE_URL env var,所以中转/直连都支持"""
+    """★ 每次调用取当前 ANTHROPIC_KEY + base_url
+    
+    中转场景关键：pub 用户的 key 是 tdyun/oneapi 的 key，不是真 Anthropic key。
+    必须把 base_url 也指向中转，否则 SDK 默认打 api.anthropic.com → 401。
+    
+    base_url 取值优先级：
+    1. Zeabur env ANTHROPIC_BASE_URL（你 backend 私仓设了这个）
+    2. App settings 里的 DEEPSEEK_BASE_URL 去掉 /v1（pub 用户填的中转地址）
+    3. 都没有 → 不传，SDK 默认走 api.anthropic.com（官方直连用户）
+    """
     key = config.get_setting('ANTHROPIC_KEY') or os.getenv('ANTHROPIC_KEY') or ''
     if not key:
         raise Exception('ANTHROPIC_KEY 未配置(去 App 设置里填 Claude API Key)')
+    
+    # ★ 中转 base_url 检测
+    base_url = os.getenv('ANTHROPIC_BASE_URL') or ''
+    if not base_url:
+        # pub 用户没设 env var，但 App settings 里可能填了 DEEPSEEK_BASE_URL
+        # tdyun 的 Anthropic 端点 = base URL 不带 /v1
+        ds_base = config.get_setting('DEEPSEEK_BASE_URL') or ''
+        ds_base = ds_base.strip().rstrip('/')
+        if ds_base:
+            # 去掉 /v1 后缀（OpenAI 兼容路径），得到 Anthropic 原生路径
+            if ds_base.endswith('/v1'):
+                base_url = ds_base[:-3]
+            else:
+                base_url = ds_base
+    
+    if base_url:
+        return anthropic.Anthropic(api_key=key, base_url=base_url)
     return anthropic.Anthropic(api_key=key)
 
 
