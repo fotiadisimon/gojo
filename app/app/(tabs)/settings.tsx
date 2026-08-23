@@ -248,10 +248,43 @@ export default function SettingsScreen() {
         {/* ── 身份 ── */}
         <View style={s.card}>
           <Text style={s.cardTitle}>身份</Text>
-          <Text style={s.hint}>本机 ID（用于区分不同用户的数据）</Text>
+          <Text style={s.hint}>
+            本机 ID（你的聊天记录、记忆都绑在这个 ID 上）{'\n'}
+            换手机后填回老 ID 就能找回所有数据
+          </Text>
           <View style={s.uidBox}>
             <Text style={s.uidText} selectable>{FIXED_USER_ID}</Text>
           </View>
+          <TouchableOpacity
+            style={[s.ghostBtn, { marginTop: 10, marginRight: 0 }]}
+            onPress={() => {
+              Alert.prompt
+                ? Alert.prompt(
+                    '恢复身份',
+                    '填入你老手机上的 ID（设置页最底部能看到）：',
+                    async (newId: string) => {
+                      const id = (newId || '').trim();
+                      if (!id || id.length < 5) {
+                        Alert.alert('无效', 'ID 太短了，检查一下');
+                        return;
+                      }
+                      await AsyncStorage.setItem('user_id', id);
+                      await AsyncStorage.setItem('gojo_user_id', id);
+                      Alert.alert('已恢复', `ID 已切换为 ${id}\n重启 App 生效`);
+                    },
+                    'plain-text',
+                    FIXED_USER_ID
+                  )
+                : // Android 没有 Alert.prompt，用简单的方案
+                  Alert.alert(
+                    '恢复身份',
+                    `当前 ID：${FIXED_USER_ID}\n\n换手机找回数据：\n1. 在老手机设置页底部复制 ID\n2. 新手机 App 里长按下方 ID 文字可以编辑\n\n或联系管理员帮你在后端改`,
+                    [{ text: '知道了' }]
+                  );
+            }}
+          >
+            <Text style={s.ghostBtnText}>换手机？恢复老 ID</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
