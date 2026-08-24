@@ -12,30 +12,59 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, SERVER_URL, FIXED_USER_ID, DEFAULT_SERVER_URL, setServerUrl } from '../../constants/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // 所有可改字段（要和后端 route_settings.py 的 ALLOWED 对齐）
-// ★ v4: hint 改成"功能描述"而不是具体模型名,减少用户困惑
 const FIELDS = [
-  { key: 'ANTHROPIC_KEY',     label: 'Claude API Key',        secret: true, hint: '直连 Claude 官方或中转 Anthropic 端点用' },
-  { key: 'MODEL_MAIN',        label: '主聊天模型',              hint: '聊天正文用,推荐用最好的模型(如 Opus/Sonnet)' },
-  { key: 'MODEL_JP_AUX',      label: '日语辅助模型',            hint: '日语小任务(纠正/术语)用,便宜快的即可' },
-  { key: 'DEEPSEEK_KEY',      label: '中转 / OpenAI 兼容 Key', secret: true, hint: '走 OpenAI 兼容路径的 key (DeepSeek 官方 / tdyun / oneapi / anyrouter 等中转)' },
-  { key: 'DEEPSEEK_MODEL',    label: '中转模型名',              hint: '中转支持的模型名,可以是任何名字 (如 claude-opus-4-6 / deepseek-chat)' },
-  { key: 'DEEPSEEK_BASE_URL', label: '中转 Base URL',          hint: '中转的地址,如 https://tdyun.ai/v1 / https://api.deepseek.com' },
-  { key: 'MODEL_CN_AUX',      label: '后台任务模型',            hint: '记忆提取/日记生成用。推荐 claude-haiku-4-5-20251001 (准确+便宜)' },
-  { key: 'FISH_KEY',          label: 'Fish Audio Key',        secret: true, hint: '语音 TTS 用,不用语音就不填' },
-  { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',          hint: '角色没单独配音色时用这个' },
+  { key: 'ANTHROPIC_KEY',     label: 'Claude API Key',    secret: true,  hint: 'sk-ant-...' },
+  { key: 'MODEL_MAIN',        label: 'Claude 主模型',      hint: 'claude-sonnet-4-5-20250929' },
+  { key: 'MODEL_JP_AUX',      label: 'Claude 辅助模型',    hint: 'claude-haiku-4-5-20251001' },
+  { key: 'DEEPSEEK_KEY',      label: 'DeepSeek / Gemini Key', secret: true, hint: '两者共用这一栏' },
+  { key: 'DEEPSEEK_MODEL',    label: '模型名',             hint: 'deepseek-chat 或 gemini-3.6-flash' },
+  { key: 'DEEPSEEK_BASE_URL', label: 'Base URL',          hint: 'https://api.deepseek.com' },
+  { key: 'MODEL_CN_AUX',      label: '后台任务模型',       hint: '记忆提取/日记生成用。推荐 claude-haiku-4-5-20251001（准确+便宜）；DeepSeek 记忆效果一般不推荐' },
+  { key: 'FISH_KEY',          label: 'Fish Audio Key',    secret: true,  hint: 'sk-fish-...' },
+  { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',      hint: '角色没单独配音色时用这个' },
 ] as const;
 
 const SECRET_KEYS = FIELDS.filter(f => (f as any).secret).map(f => f.key) as string[];
 
-// ★ v4: 砍掉了原来的 PRESETS 快速切换(DeepSeek/Gemini/Claude 一键填模型)
-//    保留下面的 provider 单选,让用户自己按需填 API 配置
+// 一键预设
+const PRESETS = [
+  {
+    name: 'DeepSeek',
+    values: {
+      LLM_PROVIDER: 'deepseek',
+      DEEPSEEK_MODEL: 'deepseek-chat',
+      DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+      MODEL_CN_AUX: 'deepseek-chat',
+    },
+  },
+  {
+    name: 'Gemini',
+    values: {
+      LLM_PROVIDER: 'deepseek',   // 借用 DeepSeek 通道（OpenAI 兼容）
+      DEEPSEEK_MODEL: 'gemini-3.6-flash',
+      DEEPSEEK_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      MODEL_CN_AUX: 'gemini-3.6-flash',
+    },
+  },
+  {
+    name: 'Claude',
+    values: {
+      LLM_PROVIDER: 'claude',
+      MODEL_MAIN: 'claude-sonnet-4-5-20250929',
+      MODEL_JP_AUX: 'claude-haiku-4-5-20251001',
+      MODEL_CN_AUX: 'claude-haiku-4-5-20251001',
+    },
+  },
+];
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
 
   const [urlInput, setUrlInput] = useState(SERVER_URL);
+  const [uidInput, setUidInput] = useState(FIXED_USER_ID);   // ★ 身份 ID 可编辑
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState('');
 
@@ -107,6 +136,11 @@ export default function SettingsScreen() {
     if ((form[key] || '').includes('****')) {
       setForm(prev => ({ ...prev, [key]: '' }));
     }
+  };
+
+  const applyPreset = (values: Record<string, string>) => {
+    setForm(prev => ({ ...prev, ...values }));
+    Alert.alert('已填入', '记得填 API Key，然后点最下面的保存');
   };
 
   const save = async () => {
@@ -183,10 +217,23 @@ export default function SettingsScreen() {
           </View>
         ) : (
           <>
-            {/* ── 选 Provider（走 Claude 官方还是 OpenAI 兼容中转）── */}
+            {/* ── 一键预设 ── */}
             <View style={s.card}>
-              <Text style={s.cardTitle}>当前 Provider</Text>
-              <Text style={s.hint}>决定请求走哪条路 —— 只影响不带 provider 前缀的请求</Text>
+              <Text style={s.cardTitle}>快速切换</Text>
+              <Text style={s.hint}>点一下自动填好模型和地址，然后补 API Key</Text>
+              <View style={s.presetRow}>
+                {PRESETS.map(p => (
+                  <TouchableOpacity
+                    key={p.name}
+                    style={s.presetBtn}
+                    onPress={() => applyPreset(p.values as any)}
+                  >
+                    <Text style={s.presetText}>{p.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[s.fieldLabel, { marginTop: 14 }]}>当前 Provider</Text>
               <View style={s.providerRow}>
                 {['claude', 'deepseek'].map(p => (
                   <TouchableOpacity
@@ -195,14 +242,13 @@ export default function SettingsScreen() {
                     onPress={() => setVal('LLM_PROVIDER', p)}
                   >
                     <Text style={[s.providerBtnText, provider === p && { color: '#fff', fontWeight: '700' }]}>
-                      {p === 'claude' ? 'Claude 官方直连' : 'OpenAI 兼容 / 中转'}
+                      {p}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
               <Text style={s.hint}>
-                · 用 Claude 官方 → 选 claude,填 Claude API Key{'\n'}
-                · 用 DeepSeek 官方 / 用中转(tdyun/oneapi等) / 用 Gemini → 选 deepseek,填中转 Base URL 和 Key
+                用 Gemini 时也选 deepseek —— 它走的是同一套 OpenAI 兼容接口
               </Text>
             </View>
 
@@ -249,42 +295,31 @@ export default function SettingsScreen() {
         <View style={s.card}>
           <Text style={s.cardTitle}>身份</Text>
           <Text style={s.hint}>
-            本机 ID（你的聊天记录、记忆都绑在这个 ID 上）{'\n'}
-            换手机后填回老 ID 就能找回所有数据
+            你的聊天记录、记忆都绑在这个 ID 上{'\n'}
+            换手机后填回老 ID → 保存 → 重启 App 就能找回所有数据
           </Text>
-          <View style={s.uidBox}>
-            <Text style={s.uidText} selectable>{FIXED_USER_ID}</Text>
-          </View>
-          <TouchableOpacity
-            style={[s.ghostBtn, { marginTop: 10, marginRight: 0 }]}
-            onPress={() => {
-              Alert.prompt
-                ? Alert.prompt(
-                    '恢复身份',
-                    '填入你老手机上的 ID（设置页最底部能看到）：',
-                    async (newId: string) => {
-                      const id = (newId || '').trim();
-                      if (!id || id.length < 5) {
-                        Alert.alert('无效', 'ID 太短了，检查一下');
-                        return;
-                      }
-                      await AsyncStorage.setItem('user_id', id);
-                      await AsyncStorage.setItem('gojo_user_id', id);
-                      Alert.alert('已恢复', `ID 已切换为 ${id}\n重启 App 生效`);
-                    },
-                    'plain-text',
-                    FIXED_USER_ID
-                  )
-                : // Android 没有 Alert.prompt，用简单的方案
-                  Alert.alert(
-                    '恢复身份',
-                    `当前 ID：${FIXED_USER_ID}\n\n换手机找回数据：\n1. 在老手机设置页底部复制 ID\n2. 新手机 App 里长按下方 ID 文字可以编辑\n\n或联系管理员帮你在后端改`,
-                    [{ text: '知道了' }]
-                  );
-            }}
-          >
-            <Text style={s.ghostBtnText}>换手机？恢复老 ID</Text>
-          </TouchableOpacity>
+          <TextInput
+            style={s.input}
+            value={uidInput}
+            onChangeText={setUidInput}
+            placeholder="user_xxxxxxxxxx"
+            placeholderTextColor={C.textMute}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {uidInput !== FIXED_USER_ID && uidInput.trim().length >= 5 && (
+            <TouchableOpacity
+              style={[s.saveBtn, { marginTop: 8 }]}
+              onPress={async () => {
+                const id = uidInput.trim();
+                await AsyncStorage.setItem('user_id', id);
+                await AsyncStorage.setItem('gojo_user_id', id);
+                Alert.alert('已保存', `ID 已切换为 ${id}\n重启 App 生效`);
+              }}
+            >
+              <Text style={s.saveBtnText}>保存新 ID（重启生效）</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
