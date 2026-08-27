@@ -1,10 +1,12 @@
 // 设置 tab —— 后端地址 + 所有 API 配置
-// ★ v3 修复：
-//   1. 保存时提交"所有非空且与服务端不同"的字段，不再依赖 localEdits 状态
-//   2. 密钥字段：点击输入框自动清空打码值，避免把 **** 存进库
-//   3. Provider 改成按钮选择，不用手打（打错就走不到任何分支）
-//   4. 支持 Gemini —— 借用 DeepSeek 通道，一键填好 base_url
+// ★ v5 最终版：
+//   - 砍掉快速切换 PRESETS（DeepSeek/Gemini/Claude 一键按钮）
+//   - Provider 只保留 claude / deepseek 二选一
+//   - hint 改成功能描述不写具体模型名
+//   - 身份 ID 改成 TextInput 可编辑（换手机找回数据）
+//   - 不用 Alert.prompt（Android 不支持）
 import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
@@ -12,71 +14,36 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { C, SERVER_URL, FIXED_USER_ID, DEFAULT_SERVER_URL, setServerUrl } from '../../constants/theme';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// 所有可改字段（要和后端 route_settings.py 的 ALLOWED 对齐）
+// 所有可改字段（和后端 route_settings.py 的 ALLOWED 对齐）
 const FIELDS = [
-  { key: 'ANTHROPIC_KEY',     label: 'Claude API Key',    secret: true,  hint: 'sk-ant-...' },
-  { key: 'MODEL_MAIN',        label: 'Claude 主模型',      hint: 'claude-sonnet-4-5-20250929' },
-  { key: 'MODEL_JP_AUX',      label: 'Claude 辅助模型',    hint: 'claude-haiku-4-5-20251001' },
-  { key: 'DEEPSEEK_KEY',      label: 'DeepSeek / Gemini Key', secret: true, hint: '两者共用这一栏' },
-  { key: 'DEEPSEEK_MODEL',    label: '模型名',             hint: 'deepseek-chat 或 gemini-3.6-flash' },
-  { key: 'DEEPSEEK_BASE_URL', label: 'Base URL',          hint: 'https://api.deepseek.com' },
-  { key: 'MODEL_CN_AUX',      label: '后台任务模型',       hint: '记忆提取/日记生成用。推荐 claude-haiku-4-5-20251001（准确+便宜）；DeepSeek 记忆效果一般不推荐' },
-  { key: 'FISH_KEY',          label: 'Fish Audio Key',    secret: true,  hint: 'sk-fish-...' },
-  { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',      hint: '角色没单独配音色时用这个' },
+  { key: 'ANTHROPIC_KEY',     label: 'Claude API Key',        secret: true, hint: '直连 Claude 官方或中转 Anthropic 端点用' },
+  { key: 'MODEL_MAIN',        label: '主聊天模型',              hint: '聊天正文用，推荐用最好的模型' },
+  { key: 'MODEL_JP_AUX',      label: '日语辅助模型',            hint: '日语小任务用，便宜快的即可' },
+  { key: 'DEEPSEEK_KEY',      label: '中转 / DeepSeek Key',    secret: true, hint: '走中转或 DeepSeek 官方的 key' },
+  { key: 'DEEPSEEK_MODEL',    label: '中转模型名',              hint: '中转支持的模型名（如 claude-opus-4-6 / deepseek-chat）' },
+  { key: 'DEEPSEEK_BASE_URL', label: '中转 Base URL',          hint: '中转地址（如 https://tdyun.ai/v1）' },
+  { key: 'MODEL_CN_AUX',      label: '后台任务模型',            hint: '记忆提取/日记生成用，推荐 claude-haiku-4-5-20251001' },
+  { key: 'FISH_KEY',          label: 'Fish Audio Key',        secret: true, hint: '语音 TTS 用，不用就不填' },
+  { key: 'FISH_VOICE_ID',     label: '默认 Voice ID',          hint: '角色没单独配音色时用这个' },
 ] as const;
-
-const SECRET_KEYS = FIELDS.filter(f => (f as any).secret).map(f => f.key) as string[];
-
-// 一键预设
-const PRESETS = [
-  {
-    name: 'DeepSeek',
-    values: {
-      LLM_PROVIDER: 'deepseek',
-      DEEPSEEK_MODEL: 'deepseek-chat',
-      DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
-      MODEL_CN_AUX: 'deepseek-chat',
-    },
-  },
-  {
-    name: 'Gemini',
-    values: {
-      LLM_PROVIDER: 'deepseek',   // 借用 DeepSeek 通道（OpenAI 兼容）
-      DEEPSEEK_MODEL: 'gemini-3.6-flash',
-      DEEPSEEK_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      MODEL_CN_AUX: 'gemini-3.6-flash',
-    },
-  },
-  {
-    name: 'Claude',
-    values: {
-      LLM_PROVIDER: 'claude',
-      MODEL_MAIN: 'claude-sonnet-4-5-20250929',
-      MODEL_JP_AUX: 'claude-haiku-4-5-20251001',
-      MODEL_CN_AUX: 'claude-haiku-4-5-20251001',
-    },
-  },
-];
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
 
   const [urlInput, setUrlInput] = useState(SERVER_URL);
-  const [uidInput, setUidInput] = useState(FIXED_USER_ID);   // ★ 身份 ID 可编辑
+  const [uidInput, setUidInput] = useState(FIXED_USER_ID);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState('');
 
-  // 服务端当前值（密钥是打码的）
   const [remote, setRemote] = useState<Record<string, string>>({});
-  // 表单里的值
   const [form, setForm] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const loadSettings = async (base?: string) => {
     const url = (base || SERVER_URL).replace(/\/+$/, '');
+    if (!url) { setLoading(false); return; }
     setLoading(true);
     try {
       const r = await axios.get(`${url}/settings`, { timeout: 10000 });
@@ -85,11 +52,7 @@ export default function SettingsScreen() {
       setForm({ ...data });
     } catch (e: any) {
       console.warn('[settings] load failed', e?.message);
-      setRemote({});
-      setForm({});
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { loadSettings(); }, []);
@@ -97,6 +60,7 @@ export default function SettingsScreen() {
   const testConnection = async () => {
     setTesting(true); setTestResult('');
     const url = urlInput.trim().replace(/\/+$/, '');
+    if (!url) { setTestResult('❌ 请先填写后端地址'); setTesting(false); return; }
     try {
       const r = await axios.get(`${url}/health`, { timeout: 8000 });
       setTestResult(`✅ 连接正常（provider: ${r.data?.provider || '?'}）`);
@@ -107,8 +71,9 @@ export default function SettingsScreen() {
 
   const saveUrl = async () => {
     const v = urlInput.trim();
+    if (!v) { Alert.alert('提示', '请填写后端地址'); return; }
     if (!/^https?:\/\//.test(v)) {
-      Alert.alert('提示', '地址必须以 http:// 或 https:// 开头');
+      Alert.alert('提示', '地址必须以 https:// 开头');
       return;
     }
     await setServerUrl(v);
@@ -117,6 +82,10 @@ export default function SettingsScreen() {
   };
 
   const resetUrl = () => {
+    if (!DEFAULT_SERVER_URL) {
+      Alert.alert('提示', '没有默认地址，请手动填写');
+      return;
+    }
     Alert.alert('恢复默认', `恢复为 ${DEFAULT_SERVER_URL}？`, [
       { text: '取消', style: 'cancel' },
       { text: '确定', onPress: async () => {
@@ -131,38 +100,29 @@ export default function SettingsScreen() {
     setForm(prev => ({ ...prev, [key]: v }));
   };
 
-  // ★ 密钥框获得焦点时，如果当前是打码值就清空，方便直接粘贴新值
   const onSecretFocus = (key: string) => {
     if ((form[key] || '').includes('****')) {
       setForm(prev => ({ ...prev, [key]: '' }));
     }
   };
 
-  const applyPreset = (values: Record<string, string>) => {
-    setForm(prev => ({ ...prev, ...values }));
-    Alert.alert('已填入', '记得填 API Key，然后点最下面的保存');
-  };
-
   const save = async () => {
-    // ★ 关键修复：提交所有"有值且和服务端不同"的字段
-    //   不再依赖 localEdits，避免输入没被记录导致提交 0 项
     const payload: Record<string, string> = {};
     for (const key of Object.keys(form)) {
       const v = (form[key] ?? '').trim();
-      if (!v) continue;                     // 空值跳过（不清空服务端配置）
-      if (v.includes('****')) continue;     // 打码值跳过
-      if (v === (remote[key] ?? '')) continue;  // 没变的跳过
+      if (!v) continue;
+      if (v.includes('****')) continue;
+      if (v === (remote[key] ?? '')) continue;
       payload[key] = v;
     }
-
     if (Object.keys(payload).length === 0) {
       Alert.alert('提示', '没有需要保存的改动');
       return;
     }
-
     setSaving(true);
     try {
       const url = SERVER_URL.replace(/\/+$/, '');
+      if (!url) { Alert.alert('错误', '请先在最上方填写并保存后端地址'); setSaving(false); return; }
       const r = await axios.put(`${url}/settings`, payload, { timeout: 15000 });
       const updated = r.data?.updated || [];
       Alert.alert('✅ 已保存', `更新了 ${updated.length} 项，立刻生效\n\n${updated.join('、')}`);
@@ -212,28 +172,14 @@ export default function SettingsScreen() {
           <View style={s.card}>
             <ActivityIndicator color={C.accent} />
             <Text style={[s.hint, { textAlign: 'center', marginTop: 10 }]}>
-              加载后端配置中…连不上就只能改上面的地址
+              加载后端配置中…{'\n'}连不上就先检查上面的地址（必须 https:// 开头）
             </Text>
           </View>
         ) : (
           <>
-            {/* ── 一键预设 ── */}
+            {/* ── Provider ── */}
             <View style={s.card}>
-              <Text style={s.cardTitle}>快速切换</Text>
-              <Text style={s.hint}>点一下自动填好模型和地址，然后补 API Key</Text>
-              <View style={s.presetRow}>
-                {PRESETS.map(p => (
-                  <TouchableOpacity
-                    key={p.name}
-                    style={s.presetBtn}
-                    onPress={() => applyPreset(p.values as any)}
-                  >
-                    <Text style={s.presetText}>{p.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={[s.fieldLabel, { marginTop: 14 }]}>当前 Provider</Text>
+              <Text style={s.cardTitle}>当前 Provider</Text>
               <View style={s.providerRow}>
                 {['claude', 'deepseek'].map(p => (
                   <TouchableOpacity
@@ -242,17 +188,18 @@ export default function SettingsScreen() {
                     onPress={() => setVal('LLM_PROVIDER', p)}
                   >
                     <Text style={[s.providerBtnText, provider === p && { color: '#fff', fontWeight: '700' }]}>
-                      {p}
+                      {p === 'claude' ? 'Claude 直连' : '中转 / DeepSeek'}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
               <Text style={s.hint}>
-                用 Gemini 时也选 deepseek —— 它走的是同一套 OpenAI 兼容接口
+                Claude 官方 → 选 Claude 直连{'\n'}
+                中转(tdyun/oneapi 等) / DeepSeek / Gemini → 选 中转
               </Text>
             </View>
 
-            {/* ── 各项配置 ── */}
+            {/* ── API 配置 ── */}
             <View style={s.card}>
               <Text style={s.cardTitle}>API 配置</Text>
               {FIELDS.map(f => {
@@ -270,13 +217,9 @@ export default function SettingsScreen() {
                       onFocus={() => isSecret && onSecretFocus(f.key)}
                       placeholder={f.hint || f.label}
                       placeholderTextColor={C.textMute}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      spellCheck={false}
+                      autoCapitalize="none" autoCorrect={false} spellCheck={false}
                     />
-                    {masked ? (
-                      <Text style={s.maskedHint}>已配置 · 点一下输入框可填新值覆盖</Text>
-                    ) : null}
+                    {masked ? <Text style={s.maskedHint}>已配置 · 点输入框可填新值覆盖</Text> : null}
                   </View>
                 );
               })}
@@ -296,7 +239,7 @@ export default function SettingsScreen() {
           <Text style={s.cardTitle}>身份</Text>
           <Text style={s.hint}>
             你的聊天记录、记忆都绑在这个 ID 上{'\n'}
-            换手机后填回老 ID → 保存 → 重启 App 就能找回所有数据
+            换手机后填回老 ID → 点保存 → 重启 App 就能找回所有数据
           </Text>
           <TextInput
             style={s.input}
@@ -304,22 +247,21 @@ export default function SettingsScreen() {
             onChangeText={setUidInput}
             placeholder="user_xxxxxxxxxx"
             placeholderTextColor={C.textMute}
-            autoCapitalize="none"
-            autoCorrect={false}
+            autoCapitalize="none" autoCorrect={false}
           />
-          {uidInput !== FIXED_USER_ID && uidInput.trim().length >= 5 && (
+          {uidInput !== FIXED_USER_ID && uidInput.trim().length >= 5 ? (
             <TouchableOpacity
-              style={[s.saveBtn, { marginTop: 8 }]}
+              style={[s.ghostBtn, { marginTop: 10, marginRight: 0 }]}
               onPress={async () => {
                 const id = uidInput.trim();
                 await AsyncStorage.setItem('user_id', id);
                 await AsyncStorage.setItem('gojo_user_id', id);
-                Alert.alert('已保存', `ID 已切换为 ${id}\n重启 App 生效`);
+                Alert.alert('已保存', `ID 已切换为 ${id}\n关掉 App 重新打开即生效`);
               }}
             >
-              <Text style={s.saveBtnText}>保存新 ID（重启生效）</Text>
+              <Text style={s.ghostBtnText}>保存新 ID（重启生效）</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -345,45 +287,29 @@ const s = StyleSheet.create({
   row: { flexDirection: 'row', marginTop: 10 },
   ghostBtn: {
     flex: 1, borderColor: C.accent, borderWidth: 1, borderRadius: 10,
-    paddingVertical: 11, alignItems: 'center', marginRight: 8,
+    paddingVertical: 11, alignItems: 'center' as const, marginRight: 8,
   },
   ghostBtnText: { color: C.accent2, fontSize: 14, fontWeight: '600' },
   primaryBtn: {
     flex: 1, backgroundColor: C.accent, borderRadius: 10,
-    paddingVertical: 11, alignItems: 'center',
+    paddingVertical: 11, alignItems: 'center' as const,
   },
   primaryBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   testResult: { color: C.textDim, fontSize: 12, marginTop: 10 },
   resetText: {
-    color: C.textMute, fontSize: 12, textAlign: 'center', marginTop: 12,
-    textDecorationLine: 'underline',
+    color: C.textMute, fontSize: 12, textAlign: 'center' as const, marginTop: 12,
+    textDecorationLine: 'underline' as const,
   },
-  presetRow: { flexDirection: 'row', flexWrap: 'wrap' },
-  presetBtn: {
-    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20,
-    backgroundColor: C.card2, borderColor: C.border, borderWidth: 1,
-    marginRight: 8, marginBottom: 8,
-  },
-  presetText: { color: C.accent2, fontSize: 13, fontWeight: '600' },
-  providerRow: { flexDirection: 'row', marginTop: 6, marginBottom: 8 },
+  providerRow: { flexDirection: 'row' as const, marginTop: 6, marginBottom: 8 },
   providerBtn: {
-    flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center',
-    borderColor: C.border, borderWidth: 1, marginRight: 8,
-    backgroundColor: C.card2,
+    flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' as const,
+    borderColor: C.border, borderWidth: 1, marginRight: 8, backgroundColor: C.card2,
   },
   providerBtnActive: { backgroundColor: C.accent, borderColor: C.accent },
   providerBtnText: { color: C.textDim, fontSize: 14 },
   bigSave: {
     backgroundColor: C.accent, borderRadius: 26,
-    paddingVertical: 16, alignItems: 'center', marginBottom: 16,
+    paddingVertical: 16, alignItems: 'center' as const, marginBottom: 16,
   },
   bigSaveText: { color: '#fff', fontSize: 17, fontWeight: '800' },
-  uidBox: {
-    backgroundColor: C.card2, borderColor: C.border, borderWidth: 1,
-    borderRadius: 10, padding: 12,
-  },
-  uidText: {
-    color: C.accent2, fontSize: 13,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
 });

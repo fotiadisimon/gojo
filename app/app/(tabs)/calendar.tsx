@@ -188,6 +188,30 @@ function ladderLabel(daysAway: number): string {
   return '1天前 + 当天';
 }
 
+// ★ 每周任务:从 due_date 反推 ISO 周几(1=周一 ... 7=周日)
+function weeklyWeekday(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.getDay() || 7;   // JS 0=周日 → 转 7
+}
+
+// ★ 本周一的日期(YYYY-MM-DD),用于判定"本周已完成"
+function mondayOfThisWeek(): string {
+  const d = new Date();
+  const dow = d.getDay() || 7;
+  d.setDate(d.getDate() - (dow - 1));
+  d.setHours(0, 0, 0, 0);
+  return formatDate(d);
+}
+
+function weeklyLabel(dateStr: string | null): string {
+  const wd = weeklyWeekday(dateStr);
+  if (!wd) return '选一个目标周几';
+  return `每${WEEKDAY_CN[wd]}`;
+}
+
+const WEEKDAY_CN = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
 export default function CalendarScreen() {
   const [tasks, setTasks]         = useState<Task[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -289,10 +313,15 @@ export default function CalendarScreen() {
 
   const isTaskCompleted = (t: Task): boolean => {
     if (t.repeat_type === 'daily') return t.last_completed_date === todayStr;
+    // ★ 每周:last_completed_date 在本周一之后就算本周已完成
+    if (t.repeat_type === 'weekly') {
+      return !!t.last_completed_date && t.last_completed_date >= mondayOfThisWeek();
+    }
     return t.completed;
   };
 
-  const isDailyContext = dateCtx === 'add' ? newRepeat === 'daily' : editRepeat === 'daily';
+  const isDailyContext  = dateCtx === 'add' ? newRepeat === 'daily'  : editRepeat === 'daily';
+  const isWeeklyContext = dateCtx === 'add' ? newRepeat === 'weekly' : editRepeat === 'weekly';
 
   useEffect(() => {
     (async () => {
@@ -377,6 +406,24 @@ export default function CalendarScreen() {
             ...(Platform.OS === 'android' ? { channelId: 'gojo-reminders' } : {}),
           },
           trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour: h, minute: m } as any,
+        });
+        ids.push(id);
+      } else if (repeat === 'weekly') {
+        if (!date) return;
+        const [y, mo, d] = date.split('-').map(Number);
+        // expo WEEKLY 的 weekday:1=周日, 2=周一 ... 7=周六(iOS/Android 原生约定)
+        const expoWd = new Date(y, mo - 1, d).getDay() + 1;
+        const id = await Notifications.scheduleNotificationAsync({
+          content: {
+            title: '每周提醒',
+            body: title,
+            sound: 'default',
+            ...(Platform.OS === 'android' ? { channelId: 'gojo-reminders' } : {}),
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.WEEKLY,
+            weekday: expoWd, hour: h, minute: m,
+          } as any,
         });
         ids.push(id);
       } else {
@@ -465,6 +512,8 @@ export default function CalendarScreen() {
       if (newDueTime && taskId) {
         if (newRepeat === 'daily') {
           await scheduleTaskNotifications(taskId, { date: null, time: newDueTime, reminder: null, repeat: 'daily', title });
+        } else if (newRepeat === 'weekly' && newDueDate) {
+          await scheduleTaskNotifications(taskId, { date: newDueDate, time: newDueTime, reminder: null, repeat: 'weekly', title });
         } else if (newDueDate && newReminder !== null) {
           await scheduleTaskNotifications(taskId, { date: newDueDate, time: newDueTime, reminder: newReminder, repeat: 'none', title, customOffsets: newOffsets });
         }
@@ -564,6 +613,8 @@ export default function CalendarScreen() {
       if (editDueTime) {
         if (editRepeat === 'daily') {
           await scheduleTaskNotifications(editTask.id, { date: null, time: editDueTime, reminder: null, repeat: 'daily', title });
+        } else if (editRepeat === 'weekly' && editDueDate) {
+          await scheduleTaskNotifications(editTask.id, { date: editDueDate, time: editDueTime, reminder: null, repeat: 'weekly', title });
         } else if (editDueDate && editReminder !== null) {
           await scheduleTaskNotifications(editTask.id, { date: editDueDate, time: editDueTime, reminder: editReminder, repeat: 'none', title, customOffsets: editOffsets });
         }
@@ -590,8 +641,9 @@ export default function CalendarScreen() {
 
   const toggleComplete = async (task: Task) => {
     try {
-      if (task.repeat_type === 'daily') {
-        const wasDone = task.last_completed_date === todayStr;
+      // ★ 每日 / 每周都用 last_completed_date 表达"本周期内已完成"
+      if (task.repeat_type === 'daily' || task.repeat_type === 'weekly') {
+        const wasDone = isTaskCompleted(task);
         const newVal = wasDone ? null : todayStr;
         await axios.put(`${SERVER_URL}/tasks/${task.id}`, { last_completed_date: newVal });
         setTasks(prev => prev.map(t => t.id === task.id ? { ...t, last_completed_date: newVal } : t));
@@ -608,7 +660,8 @@ export default function CalendarScreen() {
   const completed = filtered.filter(t => isTaskCompleted(t) || isDailyEnded(t));
 
   const dailies   = pending.filter(t => t.repeat_type === 'daily');
-  const nonDaily  = pending.filter(t => t.repeat_type !== 'daily');
+  const weeklies  = pending.filter(t => t.repeat_type === 'weekly');
+  const nonDaily  = pending.filter(t => t.repeat_type !== 'daily' && t.repeat_type !== 'weekly');
 
   // ★ 纪念日是每年循环的，不能拿它去年的日期去算"逾期"——
   //   统一走 daysUntilAnniversary，永远算到"今年（或明年）的那一天"
@@ -635,7 +688,13 @@ export default function CalendarScreen() {
   const noDate    = nonDaily.filter(t => !t.due_date);
 
   // ★ 今日进度：今天到期的任务 + 今天的打卡
-  const todayScope = [...filtered.filter(t => t.repeat_type === 'daily' && !isDailyEnded(t)),
+  const todayWd = new Date().getDay() || 7;
+  const todayScope = [
+    ...filtered.filter(t => t.repeat_type === 'daily' && !isDailyEnded(t)),
+    ...filtered.filter(t => t.repeat_type === 'weekly' && weeklyWeekday(t.due_date) === todayWd),
+    ...nonDaily.filter(t => daysLeft(t) === 0),
+    ...filtered.filter(t => t.repeat_type !== 'daily' && t.repeat_type !== 'weekly' && t.completed && t.due_date === todayStr),
+  ];
                       ...nonDaily.filter(t => daysLeft(t) === 0),
                       ...filtered.filter(t => t.repeat_type !== 'daily' && t.completed && t.due_date === todayStr)];
   const todayUniq  = Array.from(new Map(todayScope.map(t => [t.id, t])).values());
@@ -888,6 +947,17 @@ export default function CalendarScreen() {
               ))}
             </>
           )}
+          {weeklies.length > 0 && (
+            <>
+              <Text style={[s.sectionLabel, {color:'#8b5cf6'}]}>
+                🔁 每周 ({weeklies.filter(isTaskCompleted).length}/{weeklies.length})
+              </Text>
+              {weeklies.map(task => (
+                <TaskRow key={task.id} task={task} onPress={openEdit} onCheck={toggleComplete}
+                  done={isTaskCompleted(task)} />
+              ))}
+            </>
+          )}
           {dueToday.length > 0 && (
             <>
               <Text style={[s.sectionLabel, {color:C.accent2||'#5BC4FF'}]}>📌 今天 ({dueToday.length})</Text>
@@ -1077,14 +1147,24 @@ export default function CalendarScreen() {
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
-                  style={[s.repeatBtn, newRepeat === 'daily' && {backgroundColor:'#d97706', borderColor:'#d97706'}]}
+                  style={[
+                    s.repeatBtn,
+                    newRepeat === 'daily'  && {backgroundColor:'#d97706', borderColor:'#d97706'},
+                    newRepeat === 'weekly' && {backgroundColor:'#8b5cf6', borderColor:'#8b5cf6'},
+                  ]}
                   onPress={() => {
-                    const next = newRepeat === 'daily' ? 'none' : 'daily';
+                    // ★ 三态循环:none → daily → weekly → none
+                    const next = newRepeat === 'none' ? 'daily'
+                               : newRepeat === 'daily' ? 'weekly'
+                               : 'none';
                     setNewRepeat(next);
-                    setNewDueDate(null);
+                    if (next === 'daily') setNewDueDate(null);
+                    if (next === 'weekly' && !newDueDate) setNewDueDate(formatDate(new Date()));
                   }}
                 >
-                  <Text style={[s.repeatBtnText, newRepeat === 'daily' && {color:'#fff'}]}>🔁</Text>
+                  <Text style={[s.repeatBtnText, newRepeat !== 'none' && {color:'#fff', fontSize:13}]}>
+                    {newRepeat === 'daily' ? '🔁日' : newRepeat === 'weekly' ? '🔁周' : '🔁'}
+                  </Text>
                 </TouchableOpacity>
               )}
               <View style={{flex:1}} />
@@ -1179,6 +1259,13 @@ export default function CalendarScreen() {
               {isDailyContext && (
                 <View style={s.dailyHint}>
                   <Text style={s.dailyHintText}>🔁 每日打卡 — 设提醒时间，并可选「结束日期」（选「一直重复」则永久）</Text>
+                </View>
+              )}
+              {isWeeklyContext && (
+                <View style={[s.dailyHint, {backgroundColor:'#8b5cf622', borderColor:'#8b5cf6'}]}>
+                  <Text style={[s.dailyHintText, {color:'#8b5cf6'}]}>
+                    🔁 每周 — 选任意一个目标周几作为示例日，并设提醒时间
+                  </Text>
                 </View>
               )}
 
@@ -1423,6 +1510,16 @@ export default function CalendarScreen() {
                 >
                   <Text style={[s.repeatChipText, editRepeat === 'daily' && {color:'#d97706'}]}>每日打卡</Text>
                 </TouchableOpacity>
+                {/* ★ 每周 */}
+                <TouchableOpacity
+                  style={[s.repeatChip, editRepeat === 'weekly' && {backgroundColor:'#8b5cf633', borderColor:'#8b5cf6'}]}
+                  onPress={() => {
+                    setEditRepeat('weekly');
+                    if (!editDueDate) setEditDueDate(formatDate(new Date()));
+                  }}
+                >
+                  <Text style={[s.repeatChipText, editRepeat === 'weekly' && {color:'#8b5cf6'}]}>每周</Text>
+                </TouchableOpacity>
                 {/* ★ 每年重复 —— 生日、周年这种一年一次的 */}
                 <TouchableOpacity
                   style={[s.repeatChip, editRepeat === 'yearly' && {backgroundColor: CATEGORY_COLORS['纪念日']+'33', borderColor: CATEGORY_COLORS['纪念日']}]}
@@ -1436,10 +1533,16 @@ export default function CalendarScreen() {
 
             <TouchableOpacity style={s.editRow} onPress={() => openDateModal('edit')}>
               <Text style={s.editRowIcon}>📅</Text>
-              <Text style={s.editRowLabel}>{editRepeat === 'daily' ? '结束日期' : '截止日期'}</Text>
+              <Text style={s.editRowLabel}>
+                {editRepeat === 'daily' ? '结束日期'
+                 : editRepeat === 'weekly' ? '目标周几'
+                 : '截止日期'}
+              </Text>
               <Text style={s.editRowValue}>
                 {editRepeat === 'daily'
                   ? (editDueDate ? `至 ${editDueDate.replace(/-/g,'/')}` : '一直重复')
+                  : editRepeat === 'weekly'
+                  ? weeklyLabel(editDueDate)
                   : (editDueDate ? editDueDate.replace(/-/g, '/') : '无')}
               </Text>
             </TouchableOpacity>
@@ -1581,13 +1684,14 @@ function TaskRow({ task, onPress, onCheck, done }: {
   const catColor = CATEGORY_COLORS[task.category] || '#6366f1';
   const days = daysUntil(task.due_date);
   const isDaily = task.repeat_type === 'daily';
-  const isOverdue = !isDaily && days !== null && days < 0;
+  const isWeekly = task.repeat_type === 'weekly';
+  const isOverdue = !isDaily && !isWeekly && days !== null && days < 0;
   const today = formatDate(new Date());
   const dailyEnded = isDaily && !!task.due_date && task.due_date < today;
 
   // ★ DDL 徽章：越近越红
   let badge: { text: string; color: string } | null = null;
-  if (!isDaily && !done && days !== null && days >= 0) {
+  if (!isDaily && !isWeekly && !done && days !== null && days >= 0) {
     if (days === 0)      badge = { text: '今天', color: '#f87171' };
     else if (days === 1) badge = { text: 'D-1', color: '#fb923c' };
     else if (days <= 3)  badge = { text: `D-${days}`, color: '#fbbf24' };
@@ -1622,8 +1726,13 @@ function TaskRow({ task, onPress, onCheck, done }: {
               {!dailyEnded && task.due_date ? `  ·  至${task.due_date.slice(5).replace('-','/')}` : ''}
             </Text>
           )}
+          {isWeekly && (
+            <Text style={[s.taskDate, {color:'#8b5cf6'}]}>
+              🔁 {weeklyLabel(task.due_date)} {task.due_time || ''}
+            </Text>
+          )}
           {/* ★ 纪念日：一年一次，显示"每年 M月D日"和今年还有几天 */}
-          {!isDaily && task.category === '纪念日' && task.due_date && (
+          {!isDaily && !isWeekly && task.category === '纪念日' && task.due_date && (
             <Text style={[s.taskDate, {color: CATEGORY_COLORS['纪念日']}]}>
               {`🎂 每年 ${task.due_date.slice(5, 7)}月${task.due_date.slice(8, 10)}日`}
               {(() => {
@@ -1634,7 +1743,7 @@ function TaskRow({ task, onPress, onCheck, done }: {
               })()}
             </Text>
           )}
-          {!isDaily && task.category !== '纪念日' && task.due_date && (
+          {!isDaily && !isWeekly && task.category !== '纪念日' && task.due_date && (
             <Text style={[s.taskDate, isOverdue && {color:'#f87171'}]}>
               {friendlyDate(task.due_date)}{task.due_time ? `  ${task.due_time}` : ''}
             </Text>
