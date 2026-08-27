@@ -695,8 +695,6 @@ export default function CalendarScreen() {
     ...nonDaily.filter(t => daysLeft(t) === 0),
     ...filtered.filter(t => t.repeat_type !== 'daily' && t.repeat_type !== 'weekly' && t.completed && t.due_date === todayStr),
   ];
-                      ...nonDaily.filter(t => daysLeft(t) === 0),
-                      ...filtered.filter(t => t.repeat_type !== 'daily' && t.completed && t.due_date === todayStr)];
   const todayUniq  = Array.from(new Map(todayScope.map(t => [t.id, t])).values());
   const todayDone  = todayUniq.filter(isTaskCompleted).length;
   const todayTotal = todayUniq.length;
