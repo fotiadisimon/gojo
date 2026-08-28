@@ -34,6 +34,8 @@ from db_schedule import init_schedule_table
 from migrate_two_level_recall import migrate_two_level
 from proactive_msg import init_proactive_table
 from push_notify import init_push_table
+from route_courses import router as courses_router
+from db_course import init_course_tables
 
 app = FastAPI(title='GojoAssistant Simple')
 
@@ -54,6 +56,7 @@ async def startup():
     init_proactive_table()
     init_push_table()
     init_period_table()
+    init_course_tables()
     seed_all_characters()
 
     # ★ 两级召回列迁移（mention_count / linked_fact_id 等,幂等）
@@ -112,6 +115,7 @@ app.include_router(proactive_router)
 app.include_router(stats_router)
 app.include_router(config_router)
 app.include_router(settings_router)
+app.include_router(courses_router)
 
 @app.get('/health')
 async def health():
