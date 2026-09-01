@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Tuple
 
 from db import get_conn
 from ai_client import create_chat
-from config import MODEL_MAIN
+import config
 
 from relationship_db import ensure_state_row
 from relationship_state import (
@@ -199,7 +199,7 @@ def estimate_baseline(user_id: str, character_id: str) -> Optional[Dict]:
 
     try:
         raw, _usage = create_chat(
-            model=MODEL_MAIN,
+            model=config.get_setting('MODEL_MAIN'),
             messages=[{'role': 'user', 'content': prompt}],
             system=_BACKFILL_SYSTEM_PROMPT,
             max_tokens=800,

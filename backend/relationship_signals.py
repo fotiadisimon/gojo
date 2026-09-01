@@ -17,7 +17,7 @@ import re
 from typing import Dict, List, Optional
 
 from ai_client import create_chat
-from config import MODEL_MAIN
+import config
 from relationship_config import (
     SIGNAL_EXTRACTOR_MAX_TOKENS,
 )
@@ -173,18 +173,18 @@ def extract_signals(
         # ★ 注意：不传 temperature —— 中转 API 的 create_chat 不接受该参数
         #   Observer 的判断本来就靠 prompt 的严格约束，不靠低 temperature
         raw_text, _usage = create_chat(
-            model=model or MODEL_MAIN,
+            model=model or config.get_setting('MODEL_MAIN'),
             messages=[{'role': 'user', 'content': user_prompt}],
             system=_OBSERVER_SYSTEM_PROMPT,
             max_tokens=SIGNAL_EXTRACTOR_MAX_TOKENS,
         )
     except Exception as e:
-        return {'signals': [], 'raw': '', 'model': model or MODEL_MAIN,
+        return {'signals': [], 'raw': '', 'model': model or config.get_setting('MODEL_MAIN'),
                 'error': f'llm_call_failed: {e}'}
 
     parsed = _extract_json(raw_text)
     if parsed is None or 'signals' not in parsed:
-        return {'signals': [], 'raw': raw_text, 'model': model or MODEL_MAIN,
+        return {'signals': [], 'raw': raw_text, 'model': model or config.get_setting('MODEL_MAIN'),
                 'error': 'json_parse_failed'}
 
     # 简单清洗：确保每个 signal 有 signal_type/actor/confidence 三个必填
@@ -203,4 +203,4 @@ def extract_signals(
         valid_signals.append(s)
 
     return {'signals': valid_signals, 'raw': raw_text,
-            'model': model or MODEL_MAIN, 'error': None}
+            'model': model or config.get_setting('MODEL_MAIN'), 'error': None}

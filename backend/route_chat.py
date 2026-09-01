@@ -53,6 +53,7 @@ def _create_json(model, max_tokens, system_blocks, messages):
         model = config.get_setting('MODEL_JP_AUX')
 
     if provider == 'deepseek':
+        import requests as _requests
         # DeepSeek 不支持 system_blocks 数组结构（那是 Anthropic 的 prompt cache 格式），
         # 把所有块拼成一段纯文本 system prompt
         if isinstance(system_blocks, list):
@@ -63,17 +64,15 @@ def _create_json(model, max_tokens, system_blocks, messages):
         else:
             sys_text = str(system_blocks)
 
-        from openai import OpenAI
         api_key = config.get_setting('DEEPSEEK_KEY')
         if not api_key:
             raise RuntimeError('DEEPSEEK_KEY 未设置')
-        # ★ base_url 兜底：DB settings 里可能存了空串/空白，必须回退到默认
         base_url = (config.get_setting('DEEPSEEK_BASE_URL') or '').strip()
         if not base_url.startswith('http'):
             base_url = 'https://api.deepseek.com'
-        client = OpenAI(api_key=api_key, base_url=base_url)
-        # 多模态 content 降级成纯文本（DeepSeek 不支持图片输入）
-        ds_msgs = []
+
+        # 多模态 content 降级成纯文本（DeepSeek/中转 不支持图片输入）
+        ds_msgs = [{'role': 'system', 'content': sys_text}]
         for m in messages:
             c = m.get('content')
             if isinstance(c, list):
@@ -82,13 +81,28 @@ def _create_json(model, max_tokens, system_blocks, messages):
                 c = '\n'.join(t for t in texts if t) or '[图片]'
             ds_msgs.append({'role': m['role'], 'content': c})
 
-        resp = client.chat.completions.create(
-            model=(config.get_setting('DEEPSEEK_MODEL') or '').strip() or 'deepseek-chat',
-            max_tokens=max_tokens,
-            messages=[{'role': 'system', 'content': sys_text}] + ds_msgs,
+        ds_model = (config.get_setting('DEEPSEEK_MODEL') or '').strip() or 'deepseek-chat'
+        resp = _requests.post(
+            f'{base_url.rstrip("/")}/chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json={
+                'model': ds_model,
+                'max_tokens': max_tokens,
+                'messages': ds_msgs,
+            },
+            timeout=90,
         )
-        raw = (resp.choices[0].message.content or '').strip()
-        return raw, resp
+        if resp.status_code != 200:
+            raise RuntimeError(f'DeepSeek API {resp.status_code}: {resp.text[:300]}')
+        data = resp.json()
+        try:
+            raw = (data['choices'][0]['message']['content'] or '').strip()
+        except (KeyError, IndexError):
+            raise RuntimeError(f'DeepSeek 响应结构异常: {json.dumps(data)[:300]}')
+        return raw, data
 
     # ── Claude ──
     api_key = config.get_setting('ANTHROPIC_KEY')
