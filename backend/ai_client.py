@@ -149,7 +149,10 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
 
     if resp.status_code != 200:
         raise RuntimeError(f'DeepSeek API {resp.status_code}: {resp.text[:300]}')
-    data = resp.json()
+    body = resp.text.strip()
+    if not body:
+        raise RuntimeError(f'DeepSeek API 返回空响应 (model={model})')
+    data = json.loads(body)
     try:
         choice = data['choices'][0]
         msg = choice.get('message', {})

@@ -81,7 +81,8 @@ def _create_json(model, max_tokens, system_blocks, messages):
                 c = '\n'.join(t for t in texts if t) or '[图片]'
             ds_msgs.append({'role': m['role'], 'content': c})
 
-        # ★ 中转 API 靠 model 名路由，用函数参数里已解析好的 model（如 claude-opus-4-6）
+        # ★ 中转 API 用设置页填的 DEEPSEEK_MODEL（用户专门配的模型名）
+        ds_model = (config.get_setting('DEEPSEEK_MODEL') or '').strip() or model
         resp = _requests.post(
             f'{base_url.rstrip("/")}/chat/completions',
             headers={
@@ -89,7 +90,7 @@ def _create_json(model, max_tokens, system_blocks, messages):
                 'Content-Type': 'application/json',
             },
             json={
-                'model': model,
+                'model': ds_model,
                 'max_tokens': max_tokens,
                 'messages': ds_msgs,
             },
