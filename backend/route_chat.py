@@ -229,6 +229,54 @@ def _extract_pending_tx(result: dict, user_id: str, tag: str = 'chat'):
     return None
 
 
+# ═══════════════════════════════════════════════════════════════════
+# ★ v4 感情判断异步触发器
+# ═══════════════════════════════════════════════════════════════════
+def _fire_relationship_update(user_id, character_id, user_text, full_jp,
+                              core_snippet, recent_ctx):
+    import sys
+    import traceback
+
+    def _log(msg):
+        sys.stderr.write(msg + '\n')
+        sys.stderr.flush()
+
+    try:
+        from relationship_engine import process_turn
+        _log(f'[rel_update] start {user_id}/{character_id}')
+        result = process_turn(
+            user_id=user_id,
+            character_id=character_id,
+            user_message=user_text,
+            character_reply=full_jp,
+            character_core_snippet=core_snippet,
+            recent_context=recent_ctx,
+        )
+        sig_n = result.get('signals_extracted', 0)
+        app_n = result.get('signals_applied', 0)
+        err = result.get('observer_error')
+        actions = [a.get('result', {}).get('action', '?')
+                   for a in result.get('applied', [])
+                   if a.get('result')]
+        _log(f'[rel_update] done {user_id}/{character_id} '
+             f'signals={sig_n} applied={app_n} '
+             f'actions={actions} err={err}')
+    except Exception as e:
+        _log(f'[rel_update] EXCEPTION {user_id}/{character_id}: {type(e).__name__}: {e}')
+        _log(traceback.format_exc())
+
+
+def _start_relationship_update(user_id, character_id, user_text, full_jp,
+                               char, short_memories):
+    core_snippet = (char.get('core_prompt') or '')[:300]
+    recent_ctx = [{'role': r, 'content': c} for r, c in (short_memories or [])[-6:]]
+    threading.Thread(
+        target=_fire_relationship_update,
+        args=(user_id, character_id, user_text, full_jp, core_snippet, recent_ctx),
+        daemon=True,
+    ).start()
+
+
 @router.post('/chat/text')
 async def chat_text(data: dict):
     user_text    = data.get('text', '')
@@ -393,6 +441,10 @@ async def chat_text(data: dict):
                          daemon=True).start()
     except Exception:
         pass
+
+    # ★ v4 感情账本异步更新
+    _start_relationship_update(user_id, character_id, user_text, full_jp,
+                               char, short_memories)
 
     voice_id = char.get('voice_id')
     for m in msgs:

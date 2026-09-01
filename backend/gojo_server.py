@@ -36,6 +36,7 @@ from proactive_msg import init_proactive_table
 from push_notify import init_push_table
 from route_courses import router as courses_router
 from db_course import init_course_tables
+from relationship_db import init_relationship_tables
 
 app = FastAPI(title='GojoAssistant Simple')
 
@@ -57,6 +58,7 @@ async def startup():
     init_push_table()
     init_period_table()
     init_course_tables()
+    init_relationship_tables()
     seed_all_characters()
 
     # ★ 两级召回列迁移（mention_count / linked_fact_id 等,幂等）
