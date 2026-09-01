@@ -14,13 +14,18 @@
 - 幂等：重复跑不会重复叠加
 - 单进程串行，不并发（避免撞 API 限流；老用户没多少个，慢点无所谓）
 
-**使用**：
+**使用**（必须在 backend 目录下跑，Zeabur 上是 /app/backend）：
 ```bash
-# 干跑：只打印会做什么，不写数据库
-python3 relationship_backfill.py --dry-run
+cd /app/backend
 
-# 处理某一个 user + character
+# 先看这个用户有没有记忆材料（少于 3 条会跳过）
+python3 relationship_backfill.py --dry-run --user_id user_xxx --character_id gojo
+
+# 真正写入（账本为空才写）
 python3 relationship_backfill.py --user_id user_xxx --character_id gojo
+
+# 账本已有数据也强制覆盖（Zeabur 上用这个，避免卡住问 y/N）
+python3 relationship_backfill.py --force --user_id user_xxx --character_id gojo
 
 # 处理某个 user 的所有角色
 python3 relationship_backfill.py --user_id user_xxx
@@ -283,6 +288,22 @@ def is_state_empty(user_id: str, character_id: str) -> bool:
     return total < 1.0
 
 
+def _zero_state(user_id: str, character_id: str):
+    """force 覆盖前把数值清零。apply_* 是累加，不清零会叠在旧值上。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute('''UPDATE rel_state SET
+                     warmth = 0, intimacy = 0, trust = 0, attachment = 0,
+                     commitment = 0, passion = 0, pending_passion = 0,
+                     friction = '{}'::jsonb,
+                     last_updated = CURRENT_TIMESTAMP
+                   WHERE user_id = %s AND character_id = %s''',
+                (user_id, character_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 # ══════════════════════════════════════════════════════════════
 # 目标发现：找出哪些 (user_id, character_id) 有历史但账本空
 # ══════════════════════════════════════════════════════════════
@@ -323,12 +344,20 @@ def list_candidates(user_id: Optional[str] = None,
 # ══════════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════════
-def process_one(user_id: str, character_id: str, dry_run: bool = False) -> bool:
+def process_one(user_id: str, character_id: str, dry_run: bool = False,
+                force: bool = False) -> bool:
     """处理一个 (user_id, character_id)。返回是否成功写入。"""
     print(f'\n=== 处理 {user_id} / {character_id} ===')
+    history = collect_history(user_id, character_id)
+    n = (len(history['long_memory'])
+         + len(history['bond_between'])
+         + len(history['bond_told']))
+    print(f'  [材料] long_memory={len(history["long_memory"])} '
+          f'bond_between={len(history["bond_between"])} '
+          f'bond_told={len(history["bond_told"])} 合计={n} 聊天天数={history["total_days"]}')
 
-    if not is_state_empty(user_id, character_id):
-        print(f'  [skip] rel_state 已有数据，不覆盖')
+    if not force and not is_state_empty(user_id, character_id):
+        print(f'  [skip] rel_state 已有数据，不覆盖（要覆盖请加 --force）')
         return False
 
     est = estimate_baseline(user_id, character_id)
@@ -349,6 +378,10 @@ def process_one(user_id: str, character_id: str, dry_run: bool = False) -> bool:
         print(f'  [dry-run] 未写入数据库')
         return False
 
+    if force and not is_state_empty(user_id, character_id):
+        _zero_state(user_id, character_id)
+        print(f'  [force] 已把原账本清零，再写入估算值（避免叠加）')
+
     apply_baseline(user_id, character_id, est)
     print(f'  ✅ 已写入 rel_state 并留 provenance')
     return True
@@ -360,6 +393,8 @@ def main():
     parser.add_argument('--character_id', help='只处理这个 character_id')
     parser.add_argument('--all', action='store_true', help='处理所有满足条件的 (user, character) 对')
     parser.add_argument('--dry-run', action='store_true', help='只打印会做什么，不写数据库')
+    parser.add_argument('--force', action='store_true',
+                        help='账本已有数据也覆盖写入（Zeabur 上用这个，不用交互确认）')
     args = parser.parse_args()
 
     if not (args.user_id or args.all):
@@ -367,18 +402,25 @@ def main():
         print('  python3 relationship_backfill.py --dry-run --user_id user_xxx  # 干跑单个')
         print('  python3 relationship_backfill.py --user_id user_xxx           # 单个 user 所有角色')
         print('  python3 relationship_backfill.py --user_id user_xxx --character_id gojo')
+        print('  python3 relationship_backfill.py --force --user_id user_xxx --character_id gojo')
         print('  python3 relationship_backfill.py --all                        # 全部（谨慎！）')
         sys.exit(1)
 
     if args.user_id and args.character_id:
         candidates = [(args.user_id, args.character_id)]
-        # 手动指定时不检查是否空——用户可能明确想重跑
-        if not is_state_empty(args.user_id, args.character_id):
+        if not args.force and not is_state_empty(args.user_id, args.character_id):
             print(f'⚠️ {args.user_id}/{args.character_id} 的 rel_state 已有数据。')
-            ans = input('   仍然要 backfill 吗？会在原基础上叠加。[y/N] ').strip().lower()
+            print('   Zeabur 上请改用 --force，不要在这里打 y：')
+            print(f'   python3 relationship_backfill.py --force --user_id {args.user_id} --character_id {args.character_id}')
+            try:
+                ans = input('   仍然要 backfill 吗？会在原基础上叠加。[y/N] ').strip().lower()
+            except EOFError:
+                print('取消（无交互输入，请加 --force）')
+                return
             if ans != 'y':
                 print('取消')
                 return
+            args.force = True
     else:
         candidates = list_candidates(user_id=args.user_id, character_id=args.character_id)
 
@@ -393,7 +435,7 @@ def main():
     ok = fail = 0
     for uid, cid in candidates:
         try:
-            if process_one(uid, cid, dry_run=args.dry_run):
+            if process_one(uid, cid, dry_run=args.dry_run, force=args.force):
                 ok += 1
             else:
                 fail += 1
