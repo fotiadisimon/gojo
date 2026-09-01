@@ -63,6 +63,19 @@ def list_characters():
              'voice_id': r[4], 'greeting': r[5]} for r in rows]
 
 
+def delete_character(character_id: str) -> bool:
+    """删除角色本体 + 它的角色背景记忆。
+    聊天记录/长期记忆等按 user_id+character_id 存的数据不动——
+    重建同名角色时还能接上，也避免误删用户数据。"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM character_memory WHERE character_id = %s', (character_id,))
+    cur.execute('DELETE FROM characters WHERE id = %s', (character_id,))
+    deleted = cur.rowcount > 0
+    conn.commit(); cur.close(); conn.close()
+    return deleted
+
+
 def list_character_memory(character_id: str):
     conn = get_conn()
     cur = conn.cursor()

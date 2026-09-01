@@ -147,11 +147,15 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
     except requests.RequestException as e:
         raise RuntimeError(f'DeepSeek 网络异常: {e}')
 
-    if resp.status_code != 200:
-        raise RuntimeError(f'DeepSeek API {resp.status_code}: {resp.text[:300]}')
     body = resp.text.strip()
-    if not body:
-        raise RuntimeError(f'DeepSeek API 返回空响应 (model={model})')
+    # ★ 诊断：中转 API 出问题时把真实返回打出来，否则只能看到 JSONDecodeError 猜不到原因
+    if resp.status_code != 200 or not body or body[0] not in '{[':
+        print(f'[ai_client] ⚠️ 异常响应 model={model} url={base_url} '
+              f'status={resp.status_code} ct={resp.headers.get("content-type")} '
+              f'len={len(body)} body={body[:500]!r}')
+        raise RuntimeError(
+            f'中转 API 返回非 JSON (status={resp.status_code}, '
+            f'model={model}): {body[:200] or "空响应"}')
     data = json.loads(body)
     try:
         choice = data['choices'][0]

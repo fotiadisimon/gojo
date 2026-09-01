@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from config import DEFAULT_CHARACTER_ID
 from db import get_conn
 from characters import (
-    list_characters, get_character,
+    list_characters, get_character, delete_character,
     list_character_memory, add_character_memory,
     update_character_memory, delete_character_memory,
     retrieve_character_memory,
@@ -82,6 +82,15 @@ async def update_character(character_id: str, data: dict):
     conn.close()
     if not updated:
         return JSONResponse({'error': 'character not found'}, status_code=404)
+    return JSONResponse({'ok': True, 'id': character_id})
+
+
+@router.delete('/characters/{character_id}')
+async def remove_character(character_id: str):
+    """删除角色。聊天记录和记忆不动，重建同 id 角色时还能接上。"""
+    if not delete_character(character_id):
+        return JSONResponse({'error': 'character not found'}, status_code=404)
+    print(f'[character] 已删除角色 id={character_id}')
     return JSONResponse({'ok': True, 'id': character_id})
 
 
