@@ -81,7 +81,7 @@ def _create_json(model, max_tokens, system_blocks, messages):
                 c = '\n'.join(t for t in texts if t) or '[图片]'
             ds_msgs.append({'role': m['role'], 'content': c})
 
-        ds_model = (config.get_setting('DEEPSEEK_MODEL') or '').strip() or 'deepseek-chat'
+        # ★ 中转 API 靠 model 名路由，用函数参数里已解析好的 model（如 claude-opus-4-6）
         resp = _requests.post(
             f'{base_url.rstrip("/")}/chat/completions',
             headers={
@@ -89,7 +89,7 @@ def _create_json(model, max_tokens, system_blocks, messages):
                 'Content-Type': 'application/json',
             },
             json={
-                'model': ds_model,
+                'model': model,
                 'max_tokens': max_tokens,
                 'messages': ds_msgs,
             },
@@ -97,7 +97,10 @@ def _create_json(model, max_tokens, system_blocks, messages):
         )
         if resp.status_code != 200:
             raise RuntimeError(f'DeepSeek API {resp.status_code}: {resp.text[:300]}')
-        data = resp.json()
+        body = resp.text.strip()
+        if not body:
+            raise RuntimeError('DeepSeek API 返回空响应')
+        data = json.loads(body)
         try:
             raw = (data['choices'][0]['message']['content'] or '').strip()
         except (KeyError, IndexError):
