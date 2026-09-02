@@ -20,6 +20,7 @@ import config
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from ai_client import anthropic_create
 from config import EMOTIONS, TTS_PROVIDER, DEFAULT_CHARACTER_ID
 from db import get_conn
 from utils import extract_json, sanitize_jp, merge_only_extreme_short
@@ -202,22 +203,23 @@ async def chat_image(data: dict):
     result = None
     for attempt in range(5):
         try:
-            response = _client.messages.create(
+            response, raw = anthropic_create(
+                _client,
                 model=_model,
-                max_tokens=800,
+                max_tokens=2048,
                 system=system_blocks,
                 messages=messages,
             )
             log_cache_usage(f'image:{character_id}', response)
-            raw = response.content[0].text.strip()
-            print(f'[{user_id}][{character_id}] image attempt {attempt+1} ({_model}): {raw[:120]}...')
+            raw = (raw or '').strip()
+            print(f'[{user_id}][{character_id}] 图像尝试 {attempt+1} ({_model}): {raw[:120]}...')
             parsed = extract_json(raw)
             if parsed and isinstance(parsed.get('messages'), list) and len(parsed['messages']) > 0:
                 if all(m.get('jp', '').strip() and m.get('zh', '').strip() for m in parsed['messages']):
                     result = parsed
                     break
         except Exception as e:
-            print(f'image attempt {attempt+1} error: {e}')
+            print(f'图像尝试 {attempt+1} error: {e}')
 
     if not result:
         result = {

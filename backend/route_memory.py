@@ -3,6 +3,7 @@ import anthropic
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from ai_client import anthropic_create
 from config import ANTHROPIC_KEY, DEFAULT_CHARACTER_ID
 from db import get_conn
 from user_memory import (
@@ -151,7 +152,8 @@ async def reclassify_memories(data: dict):
 
     for mem_id, content in rows:
         try:
-            response = claude_client.messages.create(
+            _resp, raw = anthropic_create(
+                claude_client,
                 model='claude-haiku-4-5-20251001',
                 max_tokens=30,
                 messages=[{
@@ -172,7 +174,7 @@ async def reclassify_memories(data: dict):
 只输出分类名，例如：喜好'''
                 }]
             )
-            cat = response.content[0].text.strip()
+            cat = (raw or '').strip()
             if cat not in valid_cats:
                 cat = '其他'
             conn = get_conn()

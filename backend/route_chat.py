@@ -17,6 +17,7 @@ import config
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from ai_client import anthropic_create, extract_content_blocks
 from config import ANTHROPIC_KEY, EMOTIONS, TTS_PROVIDER, DEFAULT_CHARACTER_ID, MODEL_MAIN, MODEL_JP_AUX
 from db import get_conn
 from utils import extract_json, sanitize_jp, merge_only_extreme_short
@@ -107,7 +108,7 @@ def _create_json(model, max_tokens, system_blocks, messages):
                 f'model={ds_model}): {body[:200] or "空响应"}')
         data = json.loads(body)
         try:
-            raw = (data['choices'][0]['message']['content'] or '').strip()
+            raw = extract_content_blocks(data['choices'][0]['message'].get('content') or '').strip()
         except (KeyError, IndexError):
             raise RuntimeError(f'DeepSeek 响应结构异常: {json.dumps(data)[:300]}')
         return raw, data
@@ -117,14 +118,14 @@ def _create_json(model, max_tokens, system_blocks, messages):
     if not api_key:
         raise RuntimeError('ANTHROPIC_KEY 未设置')
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
+    response, raw = anthropic_create(
+        client,
         model=model,
         max_tokens=max_tokens,
         system=system_blocks,
         messages=messages,
     )
-    raw = response.content[0].text.strip()
-    return raw, response
+    return (raw or '').strip(), response
 
 
 def _msg_has_json_debris(m: dict) -> bool:
@@ -408,7 +409,7 @@ async def chat_text(data: dict):
     last_raw = ''   # ★ 记住最后一次模型原始回复，用于"纯日语救援"
     for attempt in range(3):
         try:
-            raw, response = _create_json('main', 1500, system_blocks, messages)
+            raw, response = _create_json('main', 4096, system_blocks, messages)
             log_cache_usage(f'chat:{character_id}', response)
             print(f'[{user_id}][{character_id}] attempt {attempt+1}: {raw[:120]}...')
             if raw:

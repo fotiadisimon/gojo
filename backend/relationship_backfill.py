@@ -207,7 +207,7 @@ def estimate_baseline(user_id: str, character_id: str) -> Optional[Dict]:
             model=config.get_setting('MODEL_MAIN'),
             messages=[{'role': 'user', 'content': prompt}],
             system=_BACKFILL_SYSTEM_PROMPT,
-            max_tokens=800,
+            max_tokens=2048,
         )
     except Exception as e:
         print(f'  [error] LLM 调用失败: {e}')

@@ -148,7 +148,7 @@ emotion 从这里选：{'/'.join(EMOTIONS_FOR_DIARY)}'''
         from ai_client import create_chat
         _model = config.get_setting('MODEL_CN_AUX') or 'claude-haiku-4-5-20251001'
         raw, _usage = create_chat(
-            model=_model, max_tokens=400,
+            model=_model, max_tokens=1500,
             messages=[{'role': 'user', 'content': prompt}],
         )
         raw = raw.strip()

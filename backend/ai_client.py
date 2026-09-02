@@ -34,6 +34,86 @@ import config
 DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com'
 
 
+def extract_text(resp) -> str:
+    """从 Anthropic / 中转响应里只拼接 text block。
+
+    Claude 开启 thinking 后，content 可能是 [ThinkingBlock, TextBlock, ...]。
+    ThinkingBlock 没有 .text，直接 content[0].text 会 AttributeError。
+    """
+    if resp is None:
+        return ''
+    if isinstance(resp, str):
+        return resp
+    content = getattr(resp, 'content', None)
+    if content is None and isinstance(resp, (list, tuple)):
+        content = resp
+    return extract_content_blocks(content)
+
+
+def extract_content_blocks(content) -> str:
+    if not content:
+        return ''
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+            continue
+        if isinstance(block, dict):
+            if (block.get('type') or 'text') == 'text':
+                parts.append(block.get('text') or '')
+            continue
+        btype = getattr(block, 'type', None)
+        if hasattr(btype, 'value'):
+            btype = btype.value
+        if btype in (
+            'thinking', 'redacted_thinking',
+            'tool_use', 'server_tool_use', 'web_search_tool_result',
+        ):
+            continue
+        text = getattr(block, 'text', None)
+        if text:
+            parts.append(text)
+    return ''.join(parts)
+
+
+def _warn_if_truncated(model, resp, text):
+    stop = getattr(resp, 'stop_reason', None)
+    if stop == 'max_tokens':
+        print(
+            f'[ai_client] ⚠️ {model} 输出被 max_tokens 截断'
+            f'(正文 {len(text or "")} 字) -> 请调大 max_tokens'
+        )
+
+
+def _thinking_not_supported(err) -> bool:
+    msg = str(err).lower()
+    return 'thinking' in msg and any(
+        k in msg for k in ('invalid', 'unknown', 'unsupported', 'unexpected', 'not support')
+    )
+
+
+def anthropic_create(client, **kwargs):
+    """统一 Anthropic messages.create：跳过 thinking 块，并显式关闭 thinking。
+
+    返回 (resp, text)。调用方需要 usage / stop_reason 时用 resp。
+    """
+    payload = dict(kwargs)
+    payload.setdefault('thinking', {'type': 'disabled'})
+    try:
+        resp = client.messages.create(**payload)
+    except Exception as e:
+        if payload.get('thinking') and _thinking_not_supported(e):
+            payload.pop('thinking', None)
+            resp = client.messages.create(**payload)
+        else:
+            raise
+    text = extract_text(resp)
+    _warn_if_truncated(payload.get('model') or '', resp, text)
+    return resp, text
+
+
 def _clean(key: str, fallback: str = '') -> str:
     """取配置并去空白；空值回退到 fallback。
     ★ 必须有这层——settings 表里可能存了空串，直接用会让 httpx 报
@@ -43,7 +123,7 @@ def _clean(key: str, fallback: str = '') -> str:
     return v or fallback
 
 
-def create_chat(model, messages, system=None, max_tokens=1000, temperature=None):
+def create_chat(model, messages, system=None, max_tokens=2048, temperature=None):
     """统一接口,自动分发到 Anthropic 或 DeepSeek(OpenAI 兼容)。
 
     ★ v3: 分派优先级
@@ -102,11 +182,11 @@ def _call_anthropic(model, messages, system, max_tokens, temperature):
         kwargs['system'] = system
     if temperature is not None:
         kwargs['temperature'] = temperature
-    resp = client.messages.create(**kwargs)
-    text = resp.content[0].text if resp.content else ''
+    resp, text = anthropic_create(client, **kwargs)
+    usage = getattr(resp, 'usage', None)
     return text, {
-        'input_tokens': getattr(resp.usage, 'input_tokens', 0),
-        'output_tokens': getattr(resp.usage, 'output_tokens', 0),
+        'input_tokens': getattr(usage, 'input_tokens', 0) if usage else 0,
+        'output_tokens': getattr(usage, 'output_tokens', 0) if usage else 0,
         'provider': 'anthropic',
     }
 
@@ -133,17 +213,23 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
     }
     if temperature is not None:
         payload['temperature'] = temperature
+    # 中转 Claude 时关掉 thinking，避免思考把 max_tokens 吃光。
+    # 不支持该字段的中转会 400，下面再去掉重试一次。
+    model_l = (model or '').lower()
+    if model_l.startswith('claude') or model_l.startswith('anthropic'):
+        payload['thinking'] = {'type': 'disabled'}
 
+    url = f'{base_url.rstrip("/")}/chat/completions'
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+    }
     try:
-        resp = requests.post(
-            f'{base_url.rstrip("/")}/chat/completions',
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-            },
-            json=payload,
-            timeout=90,
-        )
+        resp = requests.post(url, headers=headers, json=payload, timeout=90)
+        if (resp.status_code == 400 and payload.get('thinking')
+                and 'thinking' in (resp.text or '').lower()):
+            payload.pop('thinking', None)
+            resp = requests.post(url, headers=headers, json=payload, timeout=90)
     except requests.RequestException as e:
         raise RuntimeError(f'DeepSeek 网络异常: {e}')
 
@@ -160,7 +246,7 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
     try:
         choice = data['choices'][0]
         msg = choice.get('message', {})
-        text = msg.get('content') or ''
+        text = extract_content_blocks(msg.get('content') or '')
         finish = choice.get('finish_reason', '')
 
         # ★ 推理模型(deepseek-v4-flash 等)会先吐一大段 reasoning_content,
@@ -170,7 +256,7 @@ def _call_deepseek(model, messages, system, max_tokens, temperature):
             print(f'[ai_client] ⚠️ {model} 的 token 全被思考吃掉了'
                   f'(思考 {len(reasoning)} 字, 正文 0 字, finish={finish})'
                   f' → 请调大 max_tokens')
-        elif finish == 'length':
+        elif finish in ('length', 'max_tokens'):
             print(f'[ai_client] ⚠️ {model} 输出被 max_tokens 截断'
                   f'(正文 {len(text)} 字{", 思考 " + str(len(reasoning)) + " 字" if reasoning else ""})'
                   f' → 请调大 max_tokens')

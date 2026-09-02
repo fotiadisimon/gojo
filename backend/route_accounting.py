@@ -6,6 +6,7 @@ import anthropic
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from ai_client import anthropic_create
 from config import ANTHROPIC_KEY, DEFAULT_CHARACTER_ID, MODEL_JP_AUX
 from accounting import (
     list_accounts, create_account, update_account, delete_account,
@@ -203,13 +204,14 @@ async def get_insights(user_id: str = 'default',
     text_jp, text_zh = '', ''
     for attempt in range(3):
         try:
-            response = claude_client.messages.create(
+            _resp, raw = anthropic_create(
+                claude_client,
                 model=MODEL_JP_AUX,
-                max_tokens=300,
+                max_tokens=800,
                 system=system_prompt,
                 messages=[{'role': 'user', 'content': user_prompt}],
             )
-            raw = response.content[0].text.strip()
+            raw = (raw or '').strip()
             try:
                 parsed = extract_json(raw)
             except Exception:

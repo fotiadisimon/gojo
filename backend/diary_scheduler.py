@@ -134,6 +134,7 @@ def _generate_comment_reaction(character_id, diary_content, comment_content, com
     revisit_count: 第几次追加反应(0=首次,1=第一次追加,...)
     """
     import anthropic
+    from ai_client import anthropic_create
     from config import ANTHROPIC_KEY
     from characters import get_character
     from user_memory import get_short_memory, get_bond_memories, save_short_memory, save_bond_memory
@@ -216,12 +217,13 @@ def _generate_comment_reaction(character_id, diary_content, comment_content, com
 
     try:
         claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-        resp = claude_client.messages.create(
+        _resp, raw = anthropic_create(
+            claude_client,
             model=MODEL_JP_AUX,
-            max_tokens=400,
+            max_tokens=800,
             messages=[{'role': 'user', 'content': prompt}],
         )
-        raw = resp.content[0].text.strip()
+        raw = (raw or '').strip()
         from utils import extract_json
         parsed = extract_json(raw)
         if not parsed:

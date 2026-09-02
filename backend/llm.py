@@ -4,6 +4,7 @@
 下一次调用立刻生效，不用重启服务。
 """
 import config
+from ai_client import anthropic_create
 
 DEFAULT_DEEPSEEK_BASE = 'https://api.deepseek.com'
 
@@ -37,11 +38,12 @@ def _claude(system_prompt, messages, max_tokens, temperature, prefer_fast=False)
     model = (_clean('MODEL_JP_AUX', 'claude-haiku-4-5-20251001') if prefer_fast
              else _clean('MODEL_MAIN', 'claude-sonnet-4-5-20250929'))
     try:
-        resp = client.messages.create(
+        _resp, text = anthropic_create(
+            client,
             model=model, max_tokens=max_tokens, temperature=temperature,
             system=system_prompt, messages=messages,
         )
-        return resp.content[0].text
+        return text
     except Exception as e:
         raise LLMError(f'Claude 调用失败：{e}')
 

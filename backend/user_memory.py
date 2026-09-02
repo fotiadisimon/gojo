@@ -625,7 +625,7 @@ def correct_memories(user_id, user_text, character_id=DEFAULT_CHARACTER_ID):
 要删除：{{"action":"delete","ids":[1,2]}}
 不删除：{{"action":"none","ids":[]}}'''
         raw, _usage = create_chat(
-            model=_model, max_tokens=1500,
+            model=_model, max_tokens=2048,
             messages=[{'role': 'user', 'content': correction_prompt}],
         )
         raw = raw.strip()
@@ -977,7 +977,7 @@ C. told：她告诉{char_name}的、关于{char_name}本人或他的世界的信
 {{"user_fact":null,"bond":null,"told":null,"bond_merge":null}}
 category 只能选：喜好/厌恶/身份/状态/健康/经历/关系/其他'''
         raw, _usage = create_chat(
-            model=_model, max_tokens=2000,
+            model=_model, max_tokens=4096,
             messages=[{'role': 'user', 'content': prompt_content}],
         )
         raw = raw.strip()
@@ -991,7 +991,7 @@ category 只能选：喜好/厌恶/身份/状态/健康/经历/关系/其他'''
             print(f'[{user_id}] ⚠️ 首次解析失败,重试一次...')
             try:
                 raw2, _u2 = create_chat(
-                    model=_model, max_tokens=2000,
+                    model=_model, max_tokens=4096,
                     messages=[{
                         'role': 'user',
                         'content': prompt_content +
@@ -1139,7 +1139,7 @@ C. char_bonds：这一轮里发生的、值得【某个角色】记进自己回�
 {{"user_fact":{{"content":"她XXX","category":"喜好"}},"told":{{"target":"角色名","content":"她说过XXX"}},"char_bonds":[{{"target":"角色名","content":"我XXX"}}]}}
 没有的类填 null（char_bonds 没有就填 []）。category 只能选：喜好/厌恶/身份/状态/健康/经历/关系/其他'''
         raw, _usage = create_chat(
-            model=_model, max_tokens=2000,
+            model=_model, max_tokens=4096,
             messages=[{'role': 'user', 'content': group_prompt}],
         )
         raw = raw.strip()
