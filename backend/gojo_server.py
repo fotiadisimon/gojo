@@ -88,6 +88,13 @@ async def startup():
     except Exception as e:
         print(f'[startup] 主动消息排程启动失败：{e}')
 
+    try:
+        from memory_jobs import init_memory_jobs_table, start_memory_worker
+        init_memory_jobs_table()
+        start_memory_worker()
+    except Exception as e:
+        print(f'[startup] memory_jobs 启动失败：{e}')
+
     print('=' * 60)
     print('  GojoAssistant Simple 已启动')
     print(f'  Provider: {config.LLM_PROVIDER}')

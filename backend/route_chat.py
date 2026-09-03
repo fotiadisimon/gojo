@@ -25,8 +25,9 @@ from tts import tts_to_b64, transcribe_audio_b64
 from prompt import build_system_blocks, log_cache_usage
 from user_memory import (
     save_short_memory, get_short_memory,
-    update_chat_days, extract_and_save_memory
+    update_chat_days, SHORT_MEMORY_MAX,
 )
+from memory_jobs import enqueue_private_extraction
 from characters import get_character
 from tasks import (
     find_duplicate_task,
@@ -394,7 +395,7 @@ async def chat_text(data: dict):
         print(f'[{user_id}] 日程检查跳过(不影响聊天):{_e}')
 
     total_days = update_chat_days(user_id)
-    short_memories = get_short_memory(user_id, 6, character_id)
+    short_memories = get_short_memory(user_id, SHORT_MEMORY_MAX, character_id)
 
     messages = [{'role': r, 'content': c} for r, c in short_memories]
     messages.append({'role': 'user', 'content': user_text})
@@ -453,9 +454,7 @@ async def chat_text(data: dict):
     full_jp = ' '.join(m['jp'] for m in msgs)
     save_short_memory(user_id, 'user', user_text, character_id)
     save_short_memory(user_id, 'assistant', full_jp, character_id)
-    threading.Thread(target=extract_and_save_memory,
-                     args=(user_id, user_text, full_jp, character_id),
-                     daemon=True).start()
+    enqueue_private_extraction(user_id, user_text, full_jp, character_id)
     # ★ 事件驱动日记：聊到大事时，他会因为"这事值得记"而写一篇（后台，不阻塞回复）
     try:
         import diary_engine
@@ -623,7 +622,7 @@ async def chat_story(data: dict):
         return JSONResponse({'error': f'character {character_id} not found'}, status_code=404)
 
     total_days = update_chat_days(user_id)
-    short_memories = get_short_memory(user_id, 6, character_id)
+    short_memories = get_short_memory(user_id, SHORT_MEMORY_MAX, character_id)
 
     messages = [{'role': r, 'content': c} for r, c in short_memories]
     messages.append({'role': 'user', 'content': user_text})
@@ -670,9 +669,7 @@ async def chat_story(data: dict):
     full_jp = ' '.join(m['jp'] for m in msgs)
     save_short_memory(user_id, 'user', user_text, character_id)
     save_short_memory(user_id, 'assistant', full_jp, character_id)
-    threading.Thread(target=extract_and_save_memory,
-                     args=(user_id, user_text, full_jp, character_id),
-                     daemon=True).start()
+    enqueue_private_extraction(user_id, user_text, full_jp, character_id)
 
     voice_id = char.get('voice_id')
     for m in msgs:
@@ -780,7 +777,7 @@ async def chat_voice_text(data: dict):
     if not char:
         return JSONResponse({'error': f'character {character_id} not found'}, status_code=404)
 
-    short_memories = get_short_memory(user_id, 6, character_id)
+    short_memories = get_short_memory(user_id, SHORT_MEMORY_MAX, character_id)
     messages = [{'role': r, 'content': c} for r, c in short_memories]
     messages.append({'role': 'user', 'content': user_text})
 
@@ -814,9 +811,7 @@ async def chat_voice_text(data: dict):
     full_jp = ' '.join(m['jp'] for m in msgs)
     save_short_memory(user_id, 'user', user_text, character_id)
     save_short_memory(user_id, 'assistant', full_jp, character_id)
-    threading.Thread(target=extract_and_save_memory,
-                     args=(user_id, user_text, full_jp, character_id),
-                     daemon=True).start()
+    enqueue_private_extraction(user_id, user_text, full_jp, character_id)
 
     voice_id = char.get('voice_id')
     for m in msgs:
@@ -895,9 +890,7 @@ async def chat_voice_story(data: dict):
     full_jp = ' '.join(m['jp'] for m in msgs)
     save_short_memory(user_id, 'user', user_text, character_id)
     save_short_memory(user_id, 'assistant', full_jp, character_id)
-    threading.Thread(target=extract_and_save_memory,
-                     args=(user_id, user_text, full_jp, character_id),
-                     daemon=True).start()
+    enqueue_private_extraction(user_id, user_text, full_jp, character_id)
 
     voice_id = char.get('voice_id')
     for m in msgs:
