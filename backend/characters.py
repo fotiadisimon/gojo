@@ -17,7 +17,7 @@ def seed_all_characters():
     import config
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM characters')
+    cur.execute('SELECT (SELECT COUNT(*) FROM characters) + (SELECT COUNT(*) FROM character_tombstones)')
     if cur.fetchone()[0] == 0:
         cur.execute(
             '''INSERT INTO characters (id, name, name_en, voice_id, core_prompt, greeting)

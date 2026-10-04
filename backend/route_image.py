@@ -16,6 +16,7 @@
 import os
 import anthropic
 import config
+from character_lifecycle import character_work
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -107,6 +108,7 @@ def _extract_pending_tx(result: dict, user_id: str):
 
 
 @router.post('/chat/image')
+@character_work
 async def chat_image(data: dict):
     """
     接收图片（base64）+ 可选文字（caption），让 Claude Vision 识别后回复。

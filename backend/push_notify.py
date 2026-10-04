@@ -58,6 +58,15 @@ def get_tokens(user_id):
 
 
 def push_to_user(user_id, title, body, data=None):
+    from character_lifecycle import delivery_fence
+    cid = (data or {}).get('character_id')
+    if cid:
+        with delivery_fence(cid):
+            return _send_to_user(user_id, title, body, data)
+    return _send_to_user(user_id, title, body, data)
+
+
+def _send_to_user(user_id, title, body, data=None):
     """给某用户的所有设备推一条通知。静默失败（推送不该拖垮主流程）。"""
     tokens = get_tokens(user_id)
     if not tokens:

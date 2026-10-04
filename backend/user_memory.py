@@ -35,6 +35,7 @@
    - 保留 v3 全部增强：merge_bond_memories、羁绊去重、smart_recall 集成
 """
 import config
+from character_lifecycle import character_work
 from datetime import datetime, timedelta, timezone
 from config import CN_TZ, DEFAULT_CHARACTER_ID
 from db import get_conn
@@ -50,12 +51,18 @@ SHARED_CHARACTER_ID = 'shared'
 
 # 全部角色名缓存（做违禁词用，启动后第一次用时查一次库）
 _char_names_cache = None
+_char_names_epoch = None
 
 
 def _all_character_names():
     """返回库里所有角色的名字列表（含常见简称），用作用户事实的违禁词。
     ★ 以后加新角色不用再手动改违禁词列表了。"""
-    global _char_names_cache
+    global _char_names_cache, _char_names_epoch
+    from character_lifecycle import deletion_epoch
+    epoch = deletion_epoch()
+    if _char_names_epoch != epoch:
+        _char_names_cache = None
+        _char_names_epoch = epoch
     if _char_names_cache is not None:
         return _char_names_cache
     names = []
@@ -715,6 +722,7 @@ def apply_memory_corrections(user_id, ids, character_id=DEFAULT_CHARACTER_ID):
     return deleted
 
 
+@character_work
 def correct_memories(user_id, user_text, character_id=DEFAULT_CHARACTER_ID):
     """兼容旧调用：只计划、不删除。真正删除请走 extract 成功后的 apply。"""
     return bool(plan_memory_corrections(user_id, user_text, character_id))
@@ -800,6 +808,7 @@ def _norm_category(cat: str) -> str:
 
 # ────────── ★ 统一三桶提取（私聊）──────────
 
+@character_work
 def extract_and_save_memory(user_id, user_text, assistant_text, character_id=DEFAULT_CHARACTER_ID):
     """一次 Haiku 调用同时提取三类记忆：
     A user_fact —— 她透露的关于她自己的新事实 → long_memory(shared)
@@ -1133,6 +1142,7 @@ category 只能选：喜好/厌恶/身份/状态/健康/经历/关系/其他'''
 
 # ────────── ★ 群聊统一提取（用户事实 + 定向告知）──────────
 
+@character_work
 def extract_and_save_group_memory(user_id, user_text, round_transcript, members):
     """群聊版提取（bond 在群里语义模糊，只做 A 和 C 两类）：
     A user_fact —— 她的新事实 → long_memory(shared)

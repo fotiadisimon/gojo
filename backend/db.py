@@ -4,7 +4,10 @@ from config import DATABASE_URL
 
 
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    from character_lifecycle import configure_connection
+    conn = psycopg2.connect(DATABASE_URL)
+    configure_connection(conn)
+    return conn
 
 
 def init_db():
@@ -162,6 +165,9 @@ def migrate_old_gojo_memory():
     conn = get_conn()
     cur = conn.cursor()
     try:
+        cur.execute("SELECT 1 FROM character_tombstones WHERE character_id='gojo'")
+        if cur.fetchone():
+            return
         cur.execute("SELECT to_regclass('public.gojo_memory')")
         exists = cur.fetchone()[0]
         if not exists:

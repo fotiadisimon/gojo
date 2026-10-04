@@ -41,6 +41,10 @@ async def create_character(data: dict):
 
     conn = get_conn()
     cur = conn.cursor()
+    cur.execute('SELECT 1 FROM character_tombstones WHERE character_id=%s', (cid,))
+    if cid in ('shared', 'user') or cur.fetchone():
+        cur.close(); conn.close()
+        return JSONResponse({'error': '此ID已删除或保留，请使用新ID创建角色'}, status_code=409)
     cur.execute(
         '''INSERT INTO characters (id, name, name_en, avatar_url, voice_id, core_prompt, greeting)
            VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -85,13 +89,11 @@ async def update_character(character_id: str, data: dict):
     return JSONResponse({'ok': True, 'id': character_id})
 
 
+@router.delete('/character/{character_id}')
 @router.delete('/characters/{character_id}')
 async def remove_character(character_id: str):
-    """删除角色。聊天记录和记忆不动，重建同 id 角色时还能接上。"""
-    if not delete_character(character_id):
-        return JSONResponse({'error': 'character not found'}, status_code=404)
-    print(f'[character] 已删除角色 id={character_id}')
-    return JSONResponse({'ok': True, 'id': character_id})
+    # Old APKs promise to retain history: never upgrade that request to a purge.
+    return JSONResponse({'error': '请更新 App，使用带管理凭证和永久删除确认的新接口'}, status_code=409)
 
 
 # ────────── 角色背景记忆 CRUD ──────────

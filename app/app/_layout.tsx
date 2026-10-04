@@ -4,7 +4,8 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { C, loadAppConfig } from '../constants/theme';
+import { initializeCharacterStorage } from '../services/characterStorage';
+import { C, loadAppConfig, SERVER_URL, FIXED_USER_ID } from '../constants/theme';
 
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
@@ -14,6 +15,7 @@ export default function RootLayout() {
   useEffect(() => {
     (async () => {
       await loadAppConfig();
+      await initializeCharacterStorage(SERVER_URL, FIXED_USER_ID);
       setReady(true);
     })();
   }, []);

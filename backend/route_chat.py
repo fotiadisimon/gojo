@@ -14,6 +14,7 @@ import random
 import json
 import anthropic
 import config
+from character_lifecycle import character_work
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -269,6 +270,7 @@ def _extract_pending_tx(result: dict, user_id: str, tag: str = 'chat'):
 # ═══════════════════════════════════════════════════════════════════
 # ★ v4 感情判断异步触发器
 # ═══════════════════════════════════════════════════════════════════
+@character_work
 def _fire_relationship_update(user_id, character_id, user_text, full_jp,
                               core_snippet, recent_ctx):
     import sys
@@ -315,6 +317,7 @@ def _start_relationship_update(user_id, character_id, user_text, full_jp,
 
 
 @router.post('/chat/text')
+@character_work
 async def chat_text(data: dict):
     user_text    = data.get('text', '')
     user_id      = data.get('user_id', 'default')
@@ -622,6 +625,7 @@ STORY_SCENE = '''
 
 
 @router.post('/chat/story')
+@character_work
 async def chat_story(data: dict):
     user_text    = data.get('text', '')
     user_id      = data.get('user_id', 'default')
@@ -699,6 +703,7 @@ async def chat_story(data: dict):
 # ─────────────────── 主动消息（日程提醒 / 超时追问） ───────────────────
 
 @router.post('/chat/proactive')
+@character_work
 async def chat_proactive(data: dict):
     user_id      = data.get('user_id', 'default')
     task_title   = data.get('task_title', '')
@@ -771,6 +776,7 @@ VOICE_CALL_SCENE = '''
 
 
 @router.post('/chat/voice_text')
+@character_work
 async def chat_voice_text(data: dict):
     """语音通话快速回复（Haiku，比 Sonnet 快 2-3 倍）"""
     user_text    = data.get('text', '')
@@ -841,6 +847,7 @@ VOICE_STORY_SCENE = '''
 
 
 @router.post('/chat/voice_story')
+@character_work
 async def chat_voice_story(data: dict):
     user_text    = data.get('text', '')
     user_id      = data.get('user_id', 'default')
@@ -910,6 +917,7 @@ async def chat_voice_story(data: dict):
 # ─────────────────── 语音通话主动开口（接通开场 / 沉默追问） ───────────────────
 
 @router.post('/chat/voice/proactive')
+@character_work
 async def chat_voice_proactive(data: dict):
     user_id         = data.get('user_id', 'default')
     character_id    = data.get('character_id', DEFAULT_CHARACTER_ID)

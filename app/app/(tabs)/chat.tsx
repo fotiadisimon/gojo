@@ -1,3 +1,5 @@
+import DeleteCharacterModal, { DeleteTarget } from '../../components/DeleteCharacterModal';
+import { pendingDeletions } from '../../services/characterStorage';
 // 聊天 tab —— 角色列表
 // 点角色 → 进单聊；点 ➕ → 新建角色；长按 → 编辑/删除
 import axios from 'axios';
@@ -27,9 +29,12 @@ export default function ChatListScreen() {
   const [chars, setChars] = useState<Character[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const [target, setTarget] = useState<DeleteTarget | null>(null);
+  const [pending, setPending] = useState<DeleteTarget[]>([]);
 
   const load = async () => {
     setErr('');
+    setPending(await pendingDeletions(SERVER_URL, FIXED_USER_ID));
     try {
       const res = await axios.get(`${SERVER_URL}/characters`, { timeout: 10000 });
       setChars(res.data?.characters || []);
@@ -43,28 +48,19 @@ export default function ChatListScreen() {
     (async () => { setLoading(true); await load(); setLoading(false); })();
   }, []));
 
-  const del = (c: Character) => {
-    Alert.alert('删除角色', `删除「${c.name}」？聊天记录和记忆都会保留，但进不去了。`, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: async () => {
-        try {
-          await axios.delete(`${SERVER_URL}/character/${c.id}`);
-          await load();
-        } catch (e: any) { Alert.alert('删除失败', e?.message); }
-      }},
-    ]);
-  };
+  const del = (c: Character) => setTarget({ ...c, server: SERVER_URL, user: FIXED_USER_ID });
 
   const longPress = (c: Character) => {
     Alert.alert(c.name, undefined, [
       { text: '✏️ 编辑角色', onPress: () => router.push(`/character/${c.id}` as any) },
-      { text: '🗑 删除', style: 'destructive', onPress: () => del(c) },
+      { text: '🗑 彻底删除', style: 'destructive', onPress: () => del(c) },
       { text: '取消', style: 'cancel' },
     ]);
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
+      {target && <DeleteCharacterModal target={target} onClose={() => { setTarget(null); load(); }} onComplete={() => { setTarget(null); load(); }} />}
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
       <View style={[s.header, { paddingTop: insets.top + 12 }]}>
@@ -85,6 +81,9 @@ export default function ChatListScreen() {
         <View style={s.center}><ActivityIndicator color={C.accent} /></View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 30 }}>
+          {pending.map(p => <TouchableOpacity key={p.id} onPress={() => setTarget(p)} style={s.errBox}>
+            <Text style={s.errText}>角色 {p.id}：删除操作待完成 · 点击查询／重试</Text>
+          </TouchableOpacity>)}
           {err ? (
             <View style={s.errBox}>
               <Text style={s.errText}>⚠️ {err}</Text>
@@ -106,7 +105,7 @@ export default function ChatListScreen() {
                 key={c.id}
                 style={s.row}
                 activeOpacity={0.8}
-                onPress={() => router.push(`/chat/${c.id}` as any)}
+                onPress={() => pending.some(p => p.id === c.id) ? del(c) : router.push(`/chat/${encodeURIComponent(c.id)}` as any)}
                 onLongPress={() => longPress(c)}
                 delayLongPress={400}
               >

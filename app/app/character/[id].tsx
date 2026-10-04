@@ -1,3 +1,4 @@
+import * as Crypto from 'expo-crypto';
 // 角色编辑页 —— /character/new 是新建，/character/<id> 是编辑
 import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
@@ -31,7 +32,7 @@ export default function CharacterEditScreen() {
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
 
-  const [fId, setFId] = useState('');
+  const [fId, setFId] = useState(() => isNew ? Crypto.randomUUID().replace(/-/g, '') : '');
   const [fName, setFName] = useState('');
   const [fNameEn, setFNameEn] = useState('');
   const [fAvatar, setFAvatar] = useState('');

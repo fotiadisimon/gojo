@@ -198,6 +198,18 @@ def _to_vec(raw):
         return None
 
 
+_deletion_epoch = None
+
+
+def _check_deletion_epoch():
+    global _deletion_epoch
+    from character_lifecycle import deletion_epoch
+    epoch = deletion_epoch()
+    if _deletion_epoch != epoch:
+        invalidate_cache()
+        _deletion_epoch = epoch
+
+
 def _load_cache(table):
     """把表里的向量读进内存。只在首次检索时跑一次。
 
@@ -206,6 +218,7 @@ def _load_cache(table):
       而且几年前的琐事本来就不该参与检索竞争。
       真要翻很老的东西，全量列表页(记忆页)一条都不少。
     """
+    _check_deletion_epoch()
     if _CACHE_LOADED[table]:
         return
     with _CACHE_LOCK:
@@ -287,6 +300,8 @@ def save_embedding(table: str, row_id: int, content: str):
     """写记忆后调用（后台线程里跑，失败无所谓）。"""
     if not is_vector_ready():
         return
+    if table not in ('long_memory', 'bond_memory'):
+        raise ValueError('unsupported embedding table')
     vec = embed(content)
     if not vec:
         return
@@ -295,10 +310,14 @@ def save_embedding(table: str, row_id: int, content: str):
         conn = get_conn()
         cur = conn.cursor()
         cur.execute(f'UPDATE {table} SET embedding_json = %s WHERE id = %s', (raw, row_id))
+        updated = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
-        _cache_put(table, row_id, vec)
+        # Never resurrect a deleted row in memory after a zero-row UPDATE.
+        # Reload from committed DB state, including other processes' purges.
+        invalidate_cache(table)
+        return bool(updated)
     except Exception as e:
         print(f'[rag] 存 embedding 失败：{e}')
 
@@ -423,11 +442,12 @@ def backfill_embeddings(limit=500):
                 cur = conn.cursor()
                 cur.execute(f'UPDATE {table} SET embedding_json = %s WHERE id = %s',
                             (json.dumps(vec), rid))
+                updated = cur.rowcount
                 conn.commit()
                 cur.close()
                 conn.close()
-                _cache_put(table, rid, vec)
-                done += 1
+                invalidate_cache(table)
+                done += int(bool(updated))
             except Exception as e:
                 print(f'[rag] backfill 写入失败 {table}#{rid}：{e}')
                 failed += 1

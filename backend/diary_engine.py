@@ -9,6 +9,7 @@
 """
 import random
 import config
+from character_lifecycle import character_work
 from datetime import datetime, timedelta
 from config import CN_TZ, DEFAULT_CHARACTER_ID
 
@@ -23,6 +24,7 @@ EMOTIONS_FOR_DIARY = ['平静', '温柔', '调皮', '认真', '开心', '疑惑'
 #  一、他写日记
 # ══════════════════════════════════════════════════════════
 
+@character_work
 def generate_char_diary(character_id, user_id, topic=None):
     """让他写一篇日记。素材=最近对话+羁绊记忆。写"当下的他"：
        自己的日常 / 跟她聊天的感想 / 偶尔想念她。不碰漫画既定剧情。
@@ -216,6 +218,7 @@ def _name_own_diary(char_name):
 # 他"猜对密码/解锁私密篇"的概率——低，是个浪漫机关，不是常事
 UNLOCK_CHANCE = 0.06
 
+@character_work
 def peek_user_diary(character_id, user_id, visited_at=None):
     """他偷看你的日记（一次看一篇）：
        - 可见篇：直接看，留访客记号
@@ -327,6 +330,7 @@ import db_diary as _dbd
 from datetime import datetime as _dt, timedelta as _td
 
 
+@character_work
 def maybe_write_diary_on_event(character_id, user_id, user_text, reply_text):
     """每轮对话后调用（放后台线程，别阻塞回复）。
     让 Haiku 判断这次对话有没有【值得写进日记的大事】；有就以它为主题写一篇。

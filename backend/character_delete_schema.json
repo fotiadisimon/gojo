@@ -1,0 +1,353 @@
+{
+  "accounting_records": [
+    "account_id",
+    "amount",
+    "category",
+    "created_at",
+    "description",
+    "id",
+    "is_transfer",
+    "record_date",
+    "record_time",
+    "transfer_id",
+    "type",
+    "user_id"
+  ],
+  "accounts": [
+    "created_at",
+    "icon",
+    "id",
+    "initial_balance",
+    "name",
+    "sort_order",
+    "user_id"
+  ],
+  "bond_memory": [
+    "character_id",
+    "content",
+    "embedding_json",
+    "id",
+    "kind",
+    "linked_fact_id",
+    "timestamp",
+    "user_id"
+  ],
+  "char_diary": [
+    "character_id",
+    "content",
+    "created_at",
+    "emotion",
+    "id",
+    "user_id"
+  ],
+  "char_diary_comment": [
+    "content",
+    "created_at",
+    "diary_id",
+    "discovered",
+    "id",
+    "user_id"
+  ],
+  "char_schedule": [
+    "can_reply",
+    "character_id",
+    "created_at",
+    "end_time",
+    "id",
+    "location",
+    "note",
+    "sched_date",
+    "start_time",
+    "title",
+    "user_id"
+  ],
+  "character_deletion_meta": [
+    "server_id",
+    "singleton"
+  ],
+  "character_memory": [
+    "category",
+    "character_id",
+    "content",
+    "id",
+    "importance",
+    "keywords",
+    "timestamp"
+  ],
+  "character_tombstones": [
+    "character_id",
+    "counts",
+    "deleted_at",
+    "operation_id"
+  ],
+  "characters": [
+    "avatar_url",
+    "canon_lock",
+    "core_prompt",
+    "created_at",
+    "greeting",
+    "id",
+    "name",
+    "name_en",
+    "voice_id"
+  ],
+  "course_day_off": [
+    "created_at",
+    "id",
+    "note",
+    "off_date",
+    "user_id"
+  ],
+  "course_exceptions": [
+    "course_id",
+    "created_at",
+    "exception_date",
+    "exception_type",
+    "id",
+    "new_date",
+    "new_end_time",
+    "new_location",
+    "new_start_time",
+    "note",
+    "session_id"
+  ],
+  "course_sessions": [
+    "course_id",
+    "created_at",
+    "end_time",
+    "id",
+    "start_time",
+    "weekday",
+    "weeks"
+  ],
+  "courses": [
+    "color",
+    "created_at",
+    "id",
+    "location",
+    "name",
+    "note",
+    "semester_end",
+    "semester_start",
+    "teacher",
+    "user_id"
+  ],
+  "diary_book": [
+    "id",
+    "named_by_self",
+    "owner",
+    "title",
+    "updated_at",
+    "user_id"
+  ],
+  "diary_visit": [
+    "character_id",
+    "diary_id",
+    "id",
+    "reacted",
+    "unlocked",
+    "user_id",
+    "visited_at"
+  ],
+  "gojo_memory": [
+    "category",
+    "content",
+    "id",
+    "importance",
+    "keywords",
+    "timestamp"
+  ],
+  "long_memory": [
+    "category",
+    "character_id",
+    "content",
+    "embedding_json",
+    "id",
+    "last_mentioned",
+    "mention_count",
+    "pinned",
+    "timestamp",
+    "user_id"
+  ],
+  "memory_jobs": [
+    "assistant_text",
+    "attempts",
+    "character_id",
+    "created_at",
+    "extra_json",
+    "id",
+    "kind",
+    "last_error",
+    "status",
+    "updated_at",
+    "user_id",
+    "user_text"
+  ],
+  "period_records": [
+    "created_at",
+    "end_date",
+    "id",
+    "start_date",
+    "user_id"
+  ],
+  "proactive_msg": [
+    "audio_b64",
+    "character_id",
+    "created_at",
+    "emotion",
+    "id",
+    "is_read",
+    "jp",
+    "kind",
+    "user_id",
+    "zh"
+  ],
+  "proactive_promise": [
+    "character_id",
+    "context",
+    "created_at",
+    "id",
+    "is_active",
+    "is_fired",
+    "last_fired_at",
+    "origin_text",
+    "trigger_at",
+    "trigger_kind",
+    "trigger_time",
+    "user_id"
+  ],
+  "push_token": [
+    "id",
+    "token",
+    "updated_at",
+    "user_id"
+  ],
+  "rel_boundary_hits": [
+    "character_id",
+    "first_hit_at",
+    "hit_count",
+    "id",
+    "known_by_user",
+    "last_hit_at",
+    "last_intentional",
+    "last_severity",
+    "topic_id",
+    "user_id"
+  ],
+  "rel_declared_stance": [
+    "character_id",
+    "content",
+    "declared_at",
+    "id",
+    "revoke_reason",
+    "revoked_at",
+    "source_event_ref",
+    "stance_type",
+    "status",
+    "user_id"
+  ],
+  "rel_interaction_stats": [
+    "character_id",
+    "direction",
+    "id",
+    "is_initiator",
+    "is_reciprocal",
+    "session_id",
+    "timestamp",
+    "tone_category",
+    "user_id"
+  ],
+  "rel_offline_character_state": [
+    "character_id",
+    "payload",
+    "updated_at",
+    "user_id"
+  ],
+  "rel_provenance_log": [
+    "character_id",
+    "confidence",
+    "delta",
+    "evidence_refs",
+    "id",
+    "note",
+    "rule",
+    "signal_type",
+    "state_field",
+    "timestamp",
+    "user_id",
+    "value_after",
+    "value_before"
+  ],
+  "rel_repair_log": [
+    "acknowledgment",
+    "character_id",
+    "confidence",
+    "conflict_ref",
+    "corrective_action",
+    "f_reduce_ratio",
+    "id",
+    "quality_score",
+    "quality_tier",
+    "responsibility",
+    "timestamp",
+    "trust_delta",
+    "user_id"
+  ],
+  "rel_state": [
+    "attachment",
+    "banter_baseline",
+    "character_id",
+    "commitment",
+    "created_at",
+    "friction",
+    "intimacy",
+    "last_updated",
+    "passion",
+    "pending_hypothesis",
+    "pending_passion",
+    "trust",
+    "user_id",
+    "warmth"
+  ],
+  "settings": [
+    "key",
+    "updated_at",
+    "value"
+  ],
+  "short_memory": [
+    "character_id",
+    "content",
+    "id",
+    "role",
+    "timestamp",
+    "user_id"
+  ],
+  "tasks": [
+    "category",
+    "completed",
+    "created_at",
+    "due_date",
+    "due_time",
+    "id",
+    "last_completed_date",
+    "notification_id",
+    "reminder_minutes",
+    "repeat_type",
+    "title",
+    "user_id"
+  ],
+  "user_diary": [
+    "content",
+    "created_at",
+    "id",
+    "password",
+    "user_id",
+    "visibility"
+  ],
+  "user_stats": [
+    "first_chat_date",
+    "last_chat_date",
+    "total_days",
+    "user_id"
+  ]
+}

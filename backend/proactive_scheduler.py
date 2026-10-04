@@ -20,6 +20,7 @@
 """
 import threading
 import time
+from character_lifecycle import character_work
 from datetime import datetime, timedelta, date
 
 from config import CN_TZ, DEFAULT_CHARACTER_ID
@@ -43,6 +44,7 @@ def _now():
 #  共用：让角色生成一条主动消息并推送
 # ══════════════════════════════════════════════
 
+@character_work
 def _speak(character_id, user_id, kind, scene_prompt, now):
     """把 scene_prompt 交给 LLM，生成一条角色的主动消息 → 存库 + 推送。
 

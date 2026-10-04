@@ -1,3 +1,4 @@
+import { Scope, scopeKey, messageKey, audioDirectory, proactiveKey, migrateLegacy, guardedWrite, writeMessages, setUnread, isBlocked, subscribeDeletion } from '../../services/characterStorage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Audio } from 'expo-av';
@@ -40,13 +41,8 @@ Notifications.setNotificationHandler({
 const { width } = Dimensions.get('window');
 
 
-const MAX_AUDIO_ENTRIES = 30;
-const PROACTIVE_KEY  = 'gojo_proactive_state';
 const MSG_DELAY_MS   = 800;
 
-// 每个会话独立的存储 key（按 id 隔离）
-const msgStorageKey = (id: string) => `chat_msgs_${id}`;
-const audioDir       = (id: string) => `${FileSystem.documentDirectory}chat_audio_${id}/`;
 
 interface Character {
   id: string;
@@ -121,8 +117,12 @@ export default function ChatRoom() {
   const isGroup = chatId.startsWith('group_');
   const groupId = isGroup ? Number(chatId.replace('group_', '')) : null;
 
-  const STORAGE_KEY = msgStorageKey(chatId);
-  const AUDIO_DIR   = audioDir(chatId);
+  // Capture server/user at mount: an old request must not follow settings changes.
+  const scope = React.useMemo<Scope>(() => ({ server: SERVER_URL, user: FIXED_USER_ID, id: chatId }), [chatId]);
+  const STORAGE_KEY = messageKey(scope);
+  const AUDIO_DIR = audioDirectory(scope);
+  const PROACTIVE_KEY = proactiveKey(scope);
+  const alive = () => !isBlocked(scope);
 
   // 标题区数据
   const [character, setCharacter] = useState<Character | null>(null);
@@ -157,9 +157,24 @@ export default function ChatRoom() {
   const messagesRef = useRef<Message[]>([]);  // ★ 消息镜像（离开后仍能落盘）
   const lastSentRef = useRef<{ text: string; at: number }>({ text: '', at: 0 });  // ★ 防抖：挡网络卡顿导致的重复发送
 
+  useEffect(() => subscribeDeletion(deleted => {
+    if (deleted.server !== scope.server || deleted.id !== scope.id) return;
+    focusedRef.current = false;
+    interactionActiveRef.current = false;
+    messagesRef.current = [];
+    audioCacheRef.current = {};
+    setMessages([]);
+    setInputText('');
+    setPendingImage(null);
+    currentSoundRef.current?.unloadAsync().catch(() => {});
+    currentSoundRef.current = null;
+    router.replace('/(tabs)/chat' as any);
+  }), [scope]);
+
   // ── 语音文件工具 ──
   const ensureAudioDir = async () => {
     try {
+      if (!alive()) return;
       const info = await FileSystem.getInfoAsync(AUDIO_DIR);
       if (!info.exists) {
         await FileSystem.makeDirectoryAsync(AUDIO_DIR, { intermediates: true });
@@ -167,19 +182,20 @@ export default function ChatRoom() {
     } catch (e) { console.warn('ensureAudioDir', e); }
   };
   const saveAudioFile = async (msgId: string, base64: string): Promise<string | null> => {
-    try {
+    return await guardedWrite(scope, async () => {
       await ensureAudioDir();
-      const uri = `${AUDIO_DIR}${msgId}.mp3`;
+      const uri = `${AUDIO_DIR}${encodeURIComponent(msgId)}.mp3`;
       await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
       return uri;
-    } catch (e) { console.warn('saveAudioFile', e); return null; }
+    }) ?? null;
   };
   // ★ 不再按条数自动删音频——老消息的重播要永久可用。
   //   万一哪天占用太大，可在"清空记录"里一并清掉。
   const pruneAudioFiles = async () => { /* no-op：保留全部语音 */ };
   const loadAudioIndex = async () => {
     try {
-      await ensureAudioDir();
+      await guardedWrite(scope, ensureAudioDir);
+      if (!alive()) return;
       const files = await FileSystem.readDirectoryAsync(AUDIO_DIR);
       const map: Record<string, string> = {};
       for (const f of files) {
@@ -193,6 +209,8 @@ export default function ChatRoom() {
   useEffect(() => {
     (async () => {
       try {
+        await migrateLegacy(scope);
+        if (!alive()) return;
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false, playsInSilentModeIOS: true,
           staysActiveInBackground: false, shouldDuckAndroid: true, playThroughEarpieceAndroid: false,
@@ -211,7 +229,7 @@ export default function ChatRoom() {
         // 拉对话对象详情
         if (isGroup && groupId != null) {
           try {
-            const res = await axios.get(`${SERVER_URL}/group/${groupId}`);
+            const res = await axios.get(`${scope.server}/group/${groupId}`);
             setGroup({
               id: res.data.id,
               name: res.data.name,
@@ -243,12 +261,12 @@ export default function ChatRoom() {
           } catch (e) { console.warn('load group error', e); }
         } else {
           try {
-            const res = await axios.get(`${SERVER_URL}/characters/${chatId}`);
+            const res = await axios.get(`${scope.server}/characters/${chatId}`);
             setCharacter(res.data);
           } catch (e) { console.warn('load character error', e); }
           // ★ 记账账户列表:提前拉,渲染前 accounts 就已就绪(旧的 pending 卡也能立刻可用)
           try {
-            const accRes = await axios.get(`${SERVER_URL}/accounts?user_id=${FIXED_USER_ID}`);
+            const accRes = await axios.get(`${scope.server}/accounts?user_id=${scope.user}`);
             setAccounts(accRes.data?.accounts || []);
           } catch (e) { console.warn('load accounts error', e); }
           const saved = await AsyncStorage.getItem(STORAGE_KEY);
@@ -296,7 +314,7 @@ export default function ChatRoom() {
   useEffect(() => {
     if (!ready) return;
     messagesRef.current = messages;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(messages)).catch(() => {});
+    writeMessages(scope, JSON.stringify(messages)).catch(() => {});
   }, [messages, ready]);
 
   // ★ 已读计数 +delta（列表页红点 = 服务器总数 - 本地已读数）
@@ -313,7 +331,7 @@ export default function ChatRoom() {
   //   离开本页 → 停群互动轮询、停正在播的语音、后续消息静默落盘计未读
   useFocusEffect(useCallback(() => {
     focusedRef.current = true;
-    if (!isGroup) AsyncStorage.setItem(`char_unread_${chatId}`, '0').catch(() => {});
+    if (!isGroup) setUnread(scope, 0).catch(() => {});
     return () => {
       focusedRef.current = false;
       interactionActiveRef.current = false;
@@ -326,7 +344,7 @@ export default function ChatRoom() {
   // ★ 记账账户列表:进入/切回本页都刷新一次(别的 tab 加了账户,回来立刻能用)
   useFocusEffect(useCallback(() => {
     if (isGroup) return;
-    axios.get(`${SERVER_URL}/accounts?user_id=${FIXED_USER_ID}`)
+    axios.get(`${scope.server}/accounts?user_id=${scope.user}`)
       .then(r => setAccounts(r.data?.accounts || []))
       .catch(() => {});
   }, [isGroup]));
@@ -349,10 +367,11 @@ export default function ChatRoom() {
   }, [ready, chatId, isGroup]));
 
   const checkProactiveTasks = async () => {
+    if (!alive()) return;
     if (loading || checkingProactiveRef.current) return;
     checkingProactiveRef.current = true;
     try {
-      const res = await axios.get(`${SERVER_URL}/tasks?user_id=${FIXED_USER_ID}`);
+      const res = await axios.get(`${scope.server}/tasks?user_id=${scope.user}`);
       const tasks = res.data?.tasks || [];
       const stateRaw = await AsyncStorage.getItem(PROACTIVE_KEY);
       const state: Record<string, { reminded?: boolean; askedOverdue?: boolean }> =
@@ -382,7 +401,7 @@ export default function ChatRoom() {
         }
         if (mode) {
           state[stateKey] = taskState;
-          await AsyncStorage.setItem(PROACTIVE_KEY, JSON.stringify(state));
+          await guardedWrite(scope, () => AsyncStorage.setItem(PROACTIVE_KEY, JSON.stringify(state)));
           await sendProactive(task.title, mode);
           break;
         }
@@ -392,12 +411,14 @@ export default function ChatRoom() {
   };
 
   const sendProactive = async (taskTitle: string, mode: 'remind' | 'overdue') => {
+    if (!alive()) return;
     try {
-      const res = await axios.post(`${SERVER_URL}/chat/proactive`, {
-        user_id: FIXED_USER_ID, task_title: taskTitle, mode,
+      const res = await axios.post(`${scope.server}/chat/proactive`, {
+        user_id: scope.user, character_id: chatId, task_title: taskTitle, mode,
       });
       const segments: Segment[] = res.data?.messages || [];
       for (let i = 0; i < segments.length; i++) {
+        if (!alive()) return;
         const seg = segments[i];
         const msgId = `proactive_${Date.now()}_${i}`;
         let audioUri: string | null = null;
@@ -405,6 +426,7 @@ export default function ChatRoom() {
           audioUri = await saveAudioFile(msgId, seg.audio_b64);
           if (audioUri) audioCacheRef.current[msgId] = audioUri;
         }
+        if (!alive()) return;
         const msg: Message = { id: msgId, role: 'gojo', text: seg.jp, subtitle: seg.zh, time: nowTime(), timestamp: Date.now() };
         setMessages(prev => [...prev, msg]);
         scrollRef.current?.scrollToEnd({ animated: true });
@@ -424,7 +446,7 @@ export default function ChatRoom() {
     if (!beforeId) return;
     try {
       setLoadingMore(true);
-      const res = await axios.get(`${SERVER_URL}/group/${groupId}/history`, {
+      const res = await axios.get(`${scope.server}/group/${groupId}/history`, {
         params: { before_id: beforeId, limit: 30 },
       });
       const older: Message[] = (res.data?.messages || []).map((m: any) => ({
@@ -451,6 +473,7 @@ export default function ChatRoom() {
   // 重播（★ 本地没有音频就现场重新合成——任何年代的老消息都能重播）
   const [resynthing, setResynthing] = useState<string | null>(null);
   const replayAudio = async (msgId: string) => {
+    if (!alive()) return;
     const uri = audioCacheRef.current[msgId];
     if (uri) { await playAudioAndWait(uri); return; }
 
@@ -462,7 +485,7 @@ export default function ChatRoom() {
 
     try {
       setResynthing(msgId);
-      const res = await axios.post(`${SERVER_URL}/tts/resynth`, {
+      const res = await axios.post(`${scope.server}/tts/resynth`, {
         text: msg.text, character_id: speakerId,
       }, { timeout: 30000 });
       const b64 = res.data?.audio_b64;
@@ -481,6 +504,7 @@ export default function ChatRoom() {
     }
   };
   const playAudioAndWait = async (uri: string): Promise<void> => {
+    if (!alive()) return;
     try {
       if (currentSoundRef.current) {
         await currentSoundRef.current.unloadAsync();
@@ -493,6 +517,7 @@ export default function ChatRoom() {
           { uri },
           { shouldPlay: true, volume: 1.0 }
         );
+        if (!alive()) { await sound.unloadAsync(); resolve(); return; }
         currentSoundRef.current = sound;
         sound.setOnPlaybackStatusUpdate(status => {
           if (status.isLoaded && status.didJustFinish) {
@@ -539,22 +564,24 @@ export default function ChatRoom() {
       const [year, month, day] = (reminder.date || formatToday()).split('-').map(Number);
       const triggerDate = new Date(year, month - 1, day, hour, minute, 0);
       if (triggerDate <= new Date()) return;
-      const notifId = await Notifications.scheduleNotificationAsync({
+      const notifId = await guardedWrite(scope, () => Notifications.scheduleNotificationAsync({
         content: {
           title: character?.name || '提醒',
           body: reminder.notification || `おい、${reminder.content}の時間だよ。\n（喂，该${reminder.content}了。）`,
           sound: 'default',
+          data: { character_scope: scopeKey(scope), task_id: reminder.task_id || null },
           ...(Platform.OS === 'android' ? { channelId: 'gojo-reminders' } : {}),
         },
         trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate } as any,
-      });
+      }));
       if (reminder.task_id && notifId) {
-        await axios.put(`${SERVER_URL}/tasks/${reminder.task_id}`, { notification_id: notifId }).catch(() => {});
+        await axios.put(`${scope.server}/tasks/${reminder.task_id}`, { notification_id: notifId }).catch(() => {});
       }
-      await setSystemAlarm(reminder);
+      if (alive()) await setSystemAlarm(reminder);
     } catch (e) { console.warn('reminder error', e); }
   };
   const processResponseExtras = async (data: any) => {
+    if (!alive()) return;
     if (Array.isArray(data?.cancelled_tasks) && data.cancelled_tasks.length > 0) {
       for (const ct of data.cancelled_tasks) {
         if (ct.notification_id) {
@@ -602,10 +629,10 @@ export default function ChatRoom() {
     } else {
       // 人已离开:静默写入,回来时能看到
       messagesRef.current = [...messagesRef.current, cardMsg];
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(messagesRef.current)).catch(() => {});
+      writeMessages(scope, JSON.stringify(messagesRef.current)).catch(() => {});
     }
     // 顺手刷账户列表,确认卡上的余额是最新的
-    axios.get(`${SERVER_URL}/accounts?user_id=${FIXED_USER_ID}`)
+    axios.get(`${scope.server}/accounts?user_id=${scope.user}`)
       .then(r => setAccounts(r.data?.accounts || []))
       .catch(() => {});
   };
@@ -613,12 +640,14 @@ export default function ChatRoom() {
   // ★ 主动消息:拉服务器上"未读的主动汇报/问候",塞进聊天列表 + 标记已读
   //   —— 群聊不用;proactive_scheduler 只发给单聊角色
   const fetchPendingProactive = async () => {
+    if (!alive()) return;
     if (isGroup) return;
     try {
-      const res = await axios.get(`${SERVER_URL}/proactive/pending`, {
-        params: { user_id: FIXED_USER_ID, character_id: chatId },
+      const res = await axios.get(`${scope.server}/proactive/pending`, {
+        params: { user_id: scope.user, character_id: chatId },
         timeout: 10000,
       });
+      if (!alive()) return;
       const proactives: any[] = res.data?.messages || [];
       if (proactives.length === 0) return;
 
@@ -663,7 +692,7 @@ export default function ChatRoom() {
 
       // 标记已读(失败也不管,反正下次进来还会拉,是幂等的)
       if (readIds.length > 0) {
-        axios.post(`${SERVER_URL}/proactive/read`, { msg_ids: readIds }).catch(() => {});
+        axios.post(`${scope.server}/proactive/read`, { msg_ids: readIds }).catch(() => {});
       }
     } catch (e: any) {
       console.warn('fetchPendingProactive', e?.message);
@@ -752,7 +781,9 @@ export default function ChatRoom() {
 
   // 把后端返回的 segments 渲染成消息并配音
   const appendSegments = async (segments: Segment[], baseId: string) => {
+    if (!alive()) return;
     for (let i = 0; i < segments.length; i++) {
+      if (!alive()) return;
       const seg = segments[i];
       const msgId = `${baseId}_${i}`;
       let audioUri: string | null = null;
@@ -761,17 +792,16 @@ export default function ChatRoom() {
         if (audioUri) audioCacheRef.current[msgId] = audioUri;
       }
       const msg: Message = { id: msgId, role: 'gojo', text: seg.jp, subtitle: seg.zh, time: nowTime(), timestamp: Date.now() };
+      if (!alive()) return;
       if (focusedRef.current) {
         setMessages(prev => [...prev, msg]);
         scrollRef.current?.scrollToEnd({ animated: true });
       } else {
         // ★ 人已离开：静默写入本机存储 + 计未读，回来能看到、语音可点重播
         messagesRef.current = [...messagesRef.current, msg];
-        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(messagesRef.current)).catch(() => {});
+        writeMessages(scope, JSON.stringify(messagesRef.current)).catch(() => {});
         try {
-          const k = `char_unread_${chatId}`;
-          const v = parseInt((await AsyncStorage.getItem(k)) || '0', 10);
-          await AsyncStorage.setItem(k, String(v + 1));
+          await setUnread(scope, 1, true);
         } catch {}
       }
       if (audioUri && focusedRef.current) await playAudioAndWait(audioUri);
@@ -781,6 +811,7 @@ export default function ChatRoom() {
 
   // 群聊：把多个角色的回复依次渲染
   const appendGroupReplies = async (replies: GroupReply[]) => {
+    if (!alive()) return;
     for (let i = 0; i < replies.length; i++) {
       const r = replies[i];
       const msgId = r.msg_id != null ? `g_${r.msg_id}` : `${Date.now()}_${i}_${r.sender_id}`;
@@ -804,6 +835,7 @@ export default function ChatRoom() {
 
   // ★ 单条群聊回复追加(流式用)。用服务器 msg_id 作 id，重进群后与历史对得上（重播也能续上）
   const appendOneGroupReply = async (r: GroupReply) => {
+    if (!alive()) return;
     const msgId = r.msg_id != null ? `g_${r.msg_id}` : `${Date.now()}_${r.sender_id}`;
     let audioUri: string | null = null;
     if (r.audio_b64 && r.audio_b64.length > 100) {
@@ -833,7 +865,7 @@ export default function ChatRoom() {
     while (interactionActiveRef.current && turns < 8) {
       setThinkingName('有人想接话...');
       try {
-        const contRes = await axios.post(`${SERVER_URL}/group/chat/continue`, {
+        const contRes = await axios.post(`${scope.server}/group/chat/continue`, {
           group_id: groupId, turns_used: turns, user_text: originalText,
         }, { timeout: 30000 });
 
@@ -887,10 +919,10 @@ export default function ChatRoom() {
           return;
         }
         // ★ 群聊发图:第一波(不互动)
-        const res = await axios.post(`${SERVER_URL}/group/chat`, {
+        const res = await axios.post(`${scope.server}/group/chat`, {
           group_id: groupId,
           text: caption,
-          user_id: FIXED_USER_ID,
+          user_id: scope.user,
           image_base64: base64,
           media_type: mediaType,
           allow_interaction: false,
@@ -915,7 +947,7 @@ export default function ChatRoom() {
       } else {
         // 单聊发图/发视频（视频=按时间顺序的多帧）
         const payload: any = {
-          user_id: FIXED_USER_ID,
+          user_id: scope.user,
           text: caption,
           character_id: chatId,
         };
@@ -926,7 +958,7 @@ export default function ChatRoom() {
           payload.image_base64 = base64;
           payload.media_type = mediaType;
         }
-        const res = await axios.post(`${SERVER_URL}/chat/image`, payload,
+        const res = await axios.post(`${scope.server}/chat/image`, payload,
           { timeout: video ? 90000 : 60000 });
         await processResponseExtras(res.data);
         const segments: Segment[] = res.data?.messages || [];
@@ -942,6 +974,7 @@ export default function ChatRoom() {
   };
 
   const sendText = async (textOverride?: string) => {
+    if (!alive()) return;
     const text = (textOverride ?? inputText).trim();
     if (!text) return;
     // ★ 防抖：2秒内同样内容不重复发（挡网络卡顿/重试导致的双发，也省一次 API+TTS）
@@ -977,10 +1010,10 @@ export default function ChatRoom() {
           }
         }
         // ★ 第一波:只拿直接回复,不做互动循环
-        const res = await axios.post(`${SERVER_URL}/group/chat`, {
+        const res = await axios.post(`${scope.server}/group/chat`, {
           group_id: groupId,
           text,
-          user_id: FIXED_USER_ID,
+          user_id: scope.user,
           mentioned_id: mentionedId,
           allow_interaction: false,
         });
@@ -1004,8 +1037,8 @@ export default function ChatRoom() {
         }
         return; // ← 不走 finally 的 setLoading(false),因为已经手动设了
       } else {
-        const res = await axios.post(`${SERVER_URL}/chat/text`, {
-          text, user_id: FIXED_USER_ID, character_id: chatId,
+        const res = await axios.post(`${scope.server}/chat/text`, {
+          text, user_id: scope.user, character_id: chatId,
         });
         await processResponseExtras(res.data);
         let segments: Segment[] = [];
@@ -1056,7 +1089,7 @@ export default function ChatRoom() {
           try { await FileSystem.deleteAsync(AUDIO_DIR, { idempotent: true }); } catch {}
           // ★ 群聊以服务器为准：不清服务器的话，一进群又全回来了
           if (isGroup && groupId != null) {
-            try { await axios.delete(`${SERVER_URL}/group/${groupId}/messages`); } catch {}
+            try { await axios.delete(`${scope.server}/group/${groupId}/messages`); } catch {}
             try { await AsyncStorage.setItem(`group_read_count_${groupId}`, '0'); } catch {}
           }
         }
@@ -1275,7 +1308,7 @@ export default function ChatRoom() {
                     }}
                     onSaved={() => {
                       // 记账成功后刷余额,让下条卡的账户余额是最新的
-                      axios.get(`${SERVER_URL}/accounts?user_id=${FIXED_USER_ID}`)
+                      axios.get(`${scope.server}/accounts?user_id=${scope.user}`)
                         .then(r => setAccounts(r.data?.accounts || []))
                         .catch(() => {});
                     }}

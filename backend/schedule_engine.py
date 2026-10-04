@@ -16,6 +16,7 @@
    - 加了显式 system 说明这是创意写作,进一步减少拒绝
 """
 import config
+from character_lifecycle import character_work
 from datetime import datetime, timedelta
 from config import CN_TZ
 from characters import get_character
@@ -58,6 +59,7 @@ def _busy_priority(title: str) -> int:
     return 5      # 没匹配上的给中等优先级
 
 
+@character_work
 def generate_daily_schedule(character_id, user_id, target_date=None, force=False):
     """给某个角色生成某天的日程。返回条目列表或 None。
 

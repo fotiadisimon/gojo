@@ -1,3 +1,4 @@
+from character_lifecycle import character_work
 """用户记忆相关路由（★ 记忆列表 / 重分类均包含 shared 共享桶）"""
 import anthropic
 from fastapi import APIRouter
@@ -129,6 +130,7 @@ async def extract_memory_batch(data: dict):
 
 
 @router.post('/reclassify_memories')
+@character_work
 async def reclassify_memories(data: dict):
     user_id = data.get('user_id', 'default')
     character_id = data.get('character_id', DEFAULT_CHARACTER_ID)

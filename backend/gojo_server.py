@@ -17,6 +17,7 @@ from characters import seed_all_characters
 from route_accounting import router as accounting_router
 from route_avatar import router as avatar_router
 from route_character import router as character_router
+from route_character_deletion import router as character_deletion_router
 from route_chat import router as chat_router
 from route_config import router as config_router
 from route_diary import router as diary_router
@@ -50,6 +51,9 @@ app.add_middleware(
 
 @app.on_event('startup')
 async def startup():
+    from character_deletion import init_deletion_metadata, init_deletion_guards
+    from memory_jobs import init_memory_jobs_table
+    init_deletion_metadata()
     init_db()
     init_diary_tables()
     init_promise_table()
@@ -59,6 +63,9 @@ async def startup():
     init_period_table()
     init_course_tables()
     init_relationship_tables()
+    init_memory_jobs_table()
+    migrate_two_level()
+    init_deletion_guards()
     seed_all_characters()
 
     # ★ 两级召回列迁移（mention_count / linked_fact_id 等,幂等）
@@ -89,8 +96,7 @@ async def startup():
         print(f'[startup] 主动消息排程启动失败：{e}')
 
     try:
-        from memory_jobs import init_memory_jobs_table, start_memory_worker
-        init_memory_jobs_table()
+        from memory_jobs import start_memory_worker
         start_memory_worker()
     except Exception as e:
         print(f'[startup] memory_jobs 启动失败：{e}')
@@ -111,6 +117,7 @@ async def startup():
 
 # ── 注册路由 ──
 app.include_router(character_router)
+app.include_router(character_deletion_router)
 app.include_router(avatar_router)
 app.include_router(chat_router)
 app.include_router(image_router)

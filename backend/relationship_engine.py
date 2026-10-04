@@ -10,6 +10,7 @@
 ★ 铁律 4：low confidence 只入 hypothesis，不改核心状态
 ★ 铁律 5：character_stance_declared → 写入 declared_stance
 """
+from character_lifecycle import character_work
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -44,6 +45,7 @@ from relationship_repair import handle_repair_attempt
 # ══════════════════════════════════════════════════════════════
 # 顶层入口
 # ══════════════════════════════════════════════════════════════
+@character_work
 def process_turn(
     user_id: str,
     character_id: str,

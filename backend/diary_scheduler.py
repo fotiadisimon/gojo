@@ -15,6 +15,7 @@
 import threading
 import time
 import random
+from character_lifecycle import character_work
 from datetime import datetime
 from config import CN_TZ, MODEL_JP_AUX
 
@@ -128,6 +129,7 @@ def _maybe_react_to_comments(character_id):
             pass
 
 
+@character_work
 def _generate_comment_reaction(character_id, diary_content, comment_content, comment_id, revisit_count=0):
     """让 LLM 判断这条留言值不值得主动反应,并生成一句话推送给用户。
 
