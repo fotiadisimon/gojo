@@ -2,8 +2,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
 
-export type Scope = { server: string; user: string; id: string };
-export type DeleteState = Scope & { operationId: string; phase: 'pending' | 'server_deleted' | 'complete' };
+export type Scope = { server: string; user: string; id: string; writeGeneration?: number };
+export type DeleteState = Scope & {
+  operationId: string;
+  phase: 'pending' | 'failed' | 'server_deleted' | 'complete';
+  // Pending is always uncertain on reload/retry, including old v1 records.
+  // This flag describes attempts BEFORE the currently dispatched request.
+  previousOutcomeUnknown?: boolean;
+};
 export const normalizeServer = (server: string) => server.trim().replace(/\/+$/, '');
 export const scopeKey = (s: Scope) => JSON.stringify([normalizeServer(s.server), s.user, s.id]);
 const token = (s: Scope) => encodeURIComponent(scopeKey(s));
@@ -16,6 +22,7 @@ const stateKey = (s: Scope) => `character_delete:${encodeURIComponent(deletionKe
 const LEGACY_OWNER = 'chat_legacy_owner_v1';
 const listeners = new Set<(s: Scope) => void>();
 const blocked = new Set<string>();
+const generations = new Map<string, number>();
 let queue: Promise<unknown> = Promise.resolve();
 
 // All character-owned disk mutations use this queue, including already unmounted
@@ -29,7 +36,13 @@ export const subscribeDeletion = (listener: (s: Scope) => void) => {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 };
-export const isBlocked = (s: Scope) => blocked.has(deletionKey(s));
+const generation = (s: Scope) => generations.get(deletionKey(s)) || 0;
+const invalidateWriters = (s: Scope) => generations.set(deletionKey(s), generation(s) + 1);
+// Capture once per chat mount. Unblocking permits a new chat, never callbacks
+// belonging to a chat that was stopped by a deletion attempt.
+export const captureWriteScope = (s: Scope): Scope => ({ ...s, writeGeneration: generation(s) });
+export const isBlocked = (s: Scope) => blocked.has(deletionKey(s)) ||
+  (s.writeGeneration !== undefined && s.writeGeneration !== generation(s));
 
 export async function initializeCharacterStorage(server: string, user: string) {
   await serial(async () => {
@@ -66,12 +79,40 @@ export async function pendingDeletions(server: string, user: string): Promise<De
 }
 export function beginDeletion(s: Scope, operationId: string): Promise<DeleteState> {
   blocked.add(deletionKey(s));
+  invalidateWriters(s);
   listeners.forEach(listener => listener(s));
   return serial(async () => {
     const old = await deletionState(s);
-    const state: DeleteState = old || { ...s, operationId, phase: 'pending' };
+    if (old?.phase === 'server_deleted' || old?.phase === 'complete') return old;
+    const state: DeleteState = {
+      server: s.server, user: s.user, id: s.id,
+      operationId: old?.operationId || operationId, phase: 'pending',
+      previousOutcomeUnknown: !!old && old.phase !== 'failed',
+    };
+    // Persist BEFORE dispatch. A crash at any later point must leave an
+    // uncertain operation, even if its response was never processed.
     await AsyncStorage.setItem(stateKey(s), JSON.stringify(state));
     return state;
+  });
+}
+export function markDefinitiveFailure(s: Scope, operationId: string): Promise<boolean> {
+  return serial(async () => {
+    const state = await deletionState(s);
+    if (state?.phase !== 'pending' || state.operationId !== operationId || state.previousOutcomeUnknown !== false) return false;
+    await AsyncStorage.setItem(stateKey(s), JSON.stringify({ ...state, phase: 'failed' }));
+    return true;
+  });
+}
+export function cancelFailedDeletion(s: Scope): Promise<void> {
+  const cancelledGeneration = generation(s);
+  return serial(async () => {
+    const state = await deletionState(s);
+    if (state?.phase !== 'failed') throw new Error('删除结果未明确失败，不能恢复聊天；请查询／重试同一操作。');
+    // Do not remove a fence installed by a retry queued after this cancellation.
+    await AsyncStorage.removeItem(stateKey(s));
+    const retryStarted = generation(s) !== cancelledGeneration;
+    invalidateWriters(s);
+    if (!retryStarted) blocked.delete(deletionKey(s));
   });
 }
 export function markServerDeleted(s: Scope): Promise<void> {
@@ -138,7 +179,7 @@ export function cleanupCharacter(s: Scope): Promise<void> {
   listeners.forEach(listener => listener(s));
   return serial(async () => {
     const state = await deletionState(s);
-    if (!state || state.phase === 'pending') throw new Error('服务器删除结果尚未确认');
+    if (!state || (state.phase !== 'server_deleted' && state.phase !== 'complete')) throw new Error('服务器删除结果尚未确认');
     // Backend deletion covers all users. On this phone erase this exact
     // server/character for every cached user, preserving other servers/IDs.
     const scopes = new Map<string, Scope>([[scopeKey(s), s]]);

@@ -46,9 +46,15 @@ def permanent_delete(character_id: str, data: DeleteRequest):
     try:
         return purge_character(character_id, data.operation_id)
     except PurgeBlocked as exc:
-        raise HTTPException(409, str(exc)) from None
+        message = str(exc)
     except (LockNotAvailable, DeadlockDetected):
-        raise HTTPException(409, '后台写入尚未结束；请用同一操作ID查询或重试') from None
+        message = '后台写入尚未结束；请用同一操作ID查询或重试'
+    # These exceptions escape only after the transaction context has rolled
+    # back (or before it started). This says nothing about an EARLIER request.
+    raise HTTPException(409, {
+        'code': 'character_delete_rolled_back', 'message': message,
+        'operation_id': str(data.operation_id), 'character_id': character_id,
+    }) from None
 
 
 @router.get('/character-deletions/{operation_id}', dependencies=[Depends(require_delete_admin)])

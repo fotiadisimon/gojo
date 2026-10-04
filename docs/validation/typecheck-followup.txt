@@ -1,0 +1,17 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> gojo-simple-app@1.0.0 typecheck
+> tsc --noEmit
+
+app/(tabs)/calendar.tsx(59,35): error TS2322: Type 'Promise<{ shouldShowAlert: true; shouldPlaySound: true; shouldSetBadge: false; }>' is not assignable to type 'Promise<NotificationBehavior>'.
+  Type '{ shouldShowAlert: true; shouldPlaySound: true; shouldSetBadge: false; }' is missing the following properties from type 'NotificationBehavior': shouldShowBanner, shouldShowList
+app/(tabs)/settings.tsx(223,48): error TS2339: Property 'label' does not exist on type 'never'.
+app/chat/[id].tsx(34,35): error TS2322: Type 'Promise<{ shouldShowAlert: true; shouldPlaySound: true; shouldSetBadge: false; }>' is not assignable to type 'Promise<NotificationBehavior>'.
+  Type '{ shouldShowAlert: true; shouldPlaySound: true; shouldSetBadge: false; }' is missing the following properties from type 'NotificationBehavior': shouldShowBanner, shouldShowList
+components/parallax-scroll-view.tsx(11,32): error TS2307: Cannot find module '@/hooks/use-color-scheme' or its corresponding type declarations.
+components/parallax-scroll-view.tsx(12,31): error TS2307: Cannot find module '@/hooks/use-theme-color' or its corresponding type declarations.
+components/parallax-scroll-view.tsx(55,30): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{ dark: string; light: string; }'.
+components/themed-text.tsx(3,31): error TS2307: Cannot find module '@/hooks/use-theme-color' or its corresponding type declarations.
+components/themed-view.tsx(3,31): error TS2307: Cannot find module '@/hooks/use-theme-color' or its corresponding type declarations.
+components/ui/collapsible.tsx(7,10): error TS2305: Module '"@/constants/theme"' has no exported member 'Colors'.
+components/ui/collapsible.tsx(8,32): error TS2307: Cannot find module '@/hooks/use-color-scheme' or its corresponding type declarations.

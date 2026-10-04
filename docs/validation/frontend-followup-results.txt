@@ -1,0 +1,13 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> gojo-simple-app@1.0.0 test
+> jest --runInBand --silent
+
+PASS __tests__/ChatRecovery.test.tsx
+PASS __tests__/DeleteCharacterModal.test.tsx
+PASS __tests__/characterDeletion.test.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       33 passed, 33 total
+Snapshots:   0 total
+Time:        2.949 s

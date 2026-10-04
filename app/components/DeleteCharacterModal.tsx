@@ -4,7 +4,7 @@ import axios from 'axios';
 import * as Crypto from 'expo-crypto';
 import { C } from '../constants/theme';
 import { deletePermanently } from '../services/characterDeletion';
-import { deletionState, Scope } from '../services/characterStorage';
+import { cancelFailedDeletion, deletionState, Scope } from '../services/characterStorage';
 
 export type DeleteTarget = Scope & { name?: string; avatar_url?: string };
 export default function DeleteCharacterModal({ target, onClose, onComplete }: {
@@ -18,12 +18,17 @@ export default function DeleteCharacterModal({ target, onClose, onComplete }: {
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(false);
   const [localOnly, setLocalOnly] = useState(false);
+  const [canCancel, setCanCancel] = useState(false);
   const [serverIdentity, setServerIdentity] = useState('');
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const state = await deletionState(target);
+        if (mounted) {
+          setRetry(!!state); setCanCancel(state?.phase === 'failed');
+          if (state) setConfirmedId(target.id);
+        }
         if (state?.phase === 'server_deleted') {
           if (mounted) { setRetry(true); setLocalOnly(true); setConfirmedId(target.id); setReady(true); }
           return;
@@ -48,9 +53,21 @@ export default function DeleteCharacterModal({ target, onClose, onComplete }: {
       setKey(''); onComplete();
     } catch (e: any) {
       setError(e?.message || '删除失败，请重试'); setRetry(true);
-      const state = await deletionState(target);
-      if (state?.phase === 'server_deleted') setLocalOnly(true);
+      try {
+        const state = await deletionState(target);
+        setCanCancel(state?.phase === 'failed');
+        if (state?.phase === 'server_deleted') setLocalOnly(true);
+      } catch { setCanCancel(false); }
     } finally { busyRef.current = false; setBusy(false); }
+  };
+  const cancel = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true);
+    try {
+      if (canCancel) await cancelFailedDeletion(target);
+      setKey(''); onClose();
+    } catch (e: any) { setError(e?.message || '取消失败，请重试'); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   return (
     <Modal transparent animationType="fade" onRequestClose={() => { if (!busy) onClose(); }}>
@@ -71,14 +88,15 @@ export default function DeleteCharacterModal({ target, onClose, onComplete }: {
             <TextInput testID="delete-confirm-id" autoCapitalize="none" autoCorrect={false} placeholder={`输入精确 ID：${target.id}`} placeholderTextColor={C.textMute}
               value={confirmedId} onChangeText={setConfirmedId} editable={!busy} style={{ color: C.text, borderColor: C.border, borderWidth: 1, padding: 12, marginTop: 10 }} />
           </>}
+          {canCancel ? <Text style={{ color: C.textDim, marginTop: 12 }}>本次删除已明确失败，原数据保留。可取消失败尝试并恢复聊天。</Text> : null}
           {error ? <Text accessibilityRole="alert" style={{ color: C.expense, marginTop: 12 }}>{error}</Text> : null}
           {busy ? <ActivityIndicator style={{ marginTop: 16 }} /> : null}
           <TouchableOpacity testID="delete-confirm" accessibilityRole="button" disabled={busy || !ready || confirmedId !== target.id || (!key && !localOnly)} onPress={confirm}
             style={{ opacity: busy || !ready || confirmedId !== target.id || (!key && !localOnly) ? 0.4 : 1, backgroundColor: C.expense, padding: 14, borderRadius: 8, marginTop: 16 }}>
-            <Text style={{ color: '#fff', textAlign: 'center' }}>{localOnly ? '重试本机清理' : retry ? '查询／重试同一删除操作' : '确认永久删除'}</Text>
+            <Text style={{ color: '#fff', textAlign: 'center' }}>{localOnly ? '重试本机清理' : canCancel ? '重试永久删除' : retry ? '查询／重试同一删除操作' : '确认永久删除'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity testID="delete-cancel" disabled={busy} onPress={() => { setKey(''); onClose(); }} style={{ padding: 14 }}>
-            <Text style={{ color: C.textDim, textAlign: 'center' }}>{retry ? '稍后继续' : '取消'}</Text>
+          <TouchableOpacity testID="delete-cancel" disabled={busy} onPress={cancel} style={{ padding: 14 }}>
+            <Text style={{ color: C.textDim, textAlign: 'center' }}>{canCancel ? '取消失败尝试并恢复聊天' : retry ? '稍后继续' : '取消'}</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>

@@ -4,6 +4,27 @@
 基线：3d8ad861767f36186c817d76f0af52120ce73d4c。
 独立分支：codex/character-hard-delete。
 
+## 追加复核修复（基于 91fb03c）
+
+本次保留现有永久删除实现，区分明确失败与结果未知，增加失败尝试的安全取消、持久化恢复和聊天写入代次保护。没有变更数据库清理清单、鉴权要求或生产数据。
+
+| 本次实跑检查 | 结果 |
+|---|---|
+| 前端 `npm test -- --silent` | **3 suites / 33 tests passed，2.949 秒** |
+| PostgreSQL 16.15 全套回归 | **32 passed，73.13 秒**；仍为隔离 QEMU 内真实 PostgreSQL，逐项创建/销毁随机测试库 |
+| `npm run typecheck` | 退出 2；与 `91fb03c` 已记录输出相比，同样 10 个既有错误，新增 0、移除 0 |
+| Python compileall / git diff --check | 成功 |
+| Expo Android/Hermes export | 成功，4.69 MB bundle；不是 APK |
+| EAS preview APK | 非交互构建退出 1：未登录 Expo，未提供 EXPO_TOKEN。未创建构建任务、未产生 APK、未安装真机 |
+
+新增覆盖：错误管理凭证；首次明确 403/关联回滚 409 后原数据保留、取消与新聊天写入；实际聊天组件重新进入、发送消息、保存回复；旧聊天请求迟到返回不覆盖恢复后的聊天；未知请求后 403/409 及 `not_committed` 不解锁；未关联 409 不允许取消；服务层跨用户重复请求合并；正在请求时不能取消；取消存储失败与取消/重试竞争；重启后明确失败可取消、未知请求及旧版 pending 持续阻断；凭证不落盘。后端补测实际锁超时回执，以及业务删除中途三种已知异常的完整事务回滚；未知异常仍为 500，不伪造确定失败证据。
+
+修改的业务文件：`app/services/characterStorage.ts`、`app/services/characterDeletion.ts`、`app/components/DeleteCharacterModal.tsx`、`app/app/(tabs)/chat.tsx`、`app/app/chat/[id].tsx`、`backend/route_character_deletion.py`。测试：两个现有前端测试文件、新增 `app/__tests__/ChatRecovery.test.tsx`、`tests/test_character_deletion.py`。运行说明、本报告和本次 `docs/validation/*followup*` 保存结果。
+
+仍未通过/未执行：原有 10 项 TypeScript 问题未扩展修复；没有 APK 或真机文件系统/通知/播放验收。旧版 pending 无法证明原请求确定失败，升级后不能自动解除，必须继续原操作查询／重试。全程未操作生产数据库、未修改 gojo_backend、未合并 main、未部署。本次未重新运行 npm ci（依赖与锁文件未修改，使用上一轮已安装依赖）。
+
+以下保留初次实现的历史验收记录；最新结果以上表为准。
+
 ## 已实跑结果
 
 | 检查 | 实际结果 |

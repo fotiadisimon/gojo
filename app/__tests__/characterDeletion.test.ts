@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FS from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
 import axios from 'axios';
-import { beginDeletion, cleanupCharacter, deletionState, guardedWrite, initializeCharacterStorage, markServerDeleted, messageKey, migrateLegacy, scopeKey, writeMessages } from '../services/characterStorage';
+import { beginDeletion, cancelFailedDeletion, captureWriteScope, cleanupCharacter, deletionState, guardedWrite, initializeCharacterStorage, isBlocked, markServerDeleted, messageKey, migrateLegacy, pendingDeletions, scopeKey, setUnread, unreadKey, writeMessages } from '../services/characterStorage';
 import { deletePermanently } from '../services/characterDeletion';
 let n = 0;
 const scope = () => ({ server: `https://server-${++n}.test`, user: 'u1', id: 'gojo' });
@@ -111,4 +111,164 @@ test('delivered notifications are dismissed for the exact deleted role across us
  await beginDeletion(s,'op');await markServerDeleted(s);await cleanupCharacter(s);
  expect(Notifications.dismissNotificationAsync).toHaveBeenCalledTimes(1);
  expect(Notifications.dismissNotificationAsync).toHaveBeenCalledWith('owned');
+});
+
+const refusal = (status: number, s: ReturnType<typeof scope>, operationId = 'op') => ({ response: {
+  status, data: { detail: status === 403 ? 'invalid credential' : {
+    code: 'character_delete_rolled_back', operation_id: operationId, character_id: s.id,
+  } },
+} });
+
+test.each([403, 409])('first definite %s retains data and permits cancellation and new chat writes', async status => {
+  const s = scope(), oldChat = captureWriteScope(s), otherUser = captureWriteScope({ ...s, user: 'u2' });
+  await writeMessages(oldChat, 'history'); await writeMessages(otherUser, 'other user history');
+  await setUnread(s, 3);
+  (axios.post as jest.Mock).mockRejectedValueOnce(refusal(status, s));
+  await expect(deletePermanently(s, 'wrong-key', 'op')).rejects.toThrow('原数据已保留');
+  expect(axios.get).not.toHaveBeenCalled();
+  expect((await deletionState(s))?.phase).toBe('failed');
+  expect(isBlocked(s)).toBe(true);
+  await expect(cleanupCharacter(s)).rejects.toThrow('尚未确认');
+  expect(FS.deleteAsync).not.toHaveBeenCalled();
+  expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history');
+  expect(await AsyncStorage.getItem(unreadKey(s))).toBe('3');
+  await cancelFailedDeletion(s);
+  expect(await deletionState(s)).toBeNull();
+  expect(await pendingDeletions(s.server, s.user)).toEqual([]);
+  expect(isBlocked(s)).toBe(false);
+  expect(isBlocked(oldChat)).toBe(true);
+  // Old callbacks stay invalid even after the role is unblocked, across users.
+  await writeMessages(oldChat, 'stale replacement'); await writeMessages(otherUser, 'stale');
+  const audio = jest.fn(); await guardedWrite(oldChat, audio);
+  expect(audio).not.toHaveBeenCalled();
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history');
+  expect(await AsyncStorage.getItem(messageKey(otherUser))).toBe('other user history');
+  const newChat = captureWriteScope(s);
+  expect(isBlocked(newChat)).toBe(false);
+  await writeMessages(newChat, 'history + new reply'); await setUnread(newChat, 1, true);
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history + new reply');
+  expect(await AsyncStorage.getItem(unreadKey(s))).toBe('4');
+});
+
+test.each([403, 409])('an earlier unknown request stays blocked after retry %s and not_committed', async status => {
+  const s = scope(); await writeMessages(s, 'history');
+  (axios.post as jest.Mock).mockRejectedValueOnce(new Error('timeout')).mockRejectedValueOnce(refusal(status, s, 'original'));
+  (axios.get as jest.Mock).mockResolvedValue({ data: { status: 'not_committed', operation_id: 'original' } });
+  await expect(deletePermanently(s, 'valid', 'original')).rejects.toThrow('结果未知');
+  await expect(deletePermanently(s, 'wrong', 'different')).rejects.toThrow('结果未知');
+  expect((await deletionState(s))?.phase).toBe('pending');
+  expect((await deletionState(s))?.previousOutcomeUnknown).toBe(true);
+  expect((axios.post as jest.Mock).mock.calls[1][1].operation_id).toBe('original');
+  await expect(cancelFailedDeletion(s)).rejects.toThrow('不能恢复聊天');
+  await writeMessages(captureWriteScope(s), 'must not write');
+  expect(isBlocked(s)).toBe(true);
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history');
+  expect(FS.deleteAsync).not.toHaveBeenCalled();
+});
+
+test.each(['generic', 'wrong-operation', 'wrong-character'])('uncorrelated 409 (%s) never enables cancellation', async variant => {
+  const s = scope(); const error: any = refusal(409, s);
+  if (variant === 'generic') error.response.data.detail = 'Conflict';
+  if (variant === 'wrong-operation') error.response.data.detail.operation_id = 'other';
+  if (variant === 'wrong-character') error.response.data.detail.character_id = 'Gojo';
+  (axios.post as jest.Mock).mockRejectedValueOnce(error);
+  (axios.get as jest.Mock).mockResolvedValueOnce({ data: { status: 'not_committed' } });
+  await expect(deletePermanently(s, 'key', 'op')).rejects.toThrow('结果未知');
+  await expect(cancelFailedDeletion(s)).rejects.toThrow('不能恢复聊天');
+});
+
+test('duplicate service calls share one request; cancellation while inflight is refused', async () => {
+  const s = scope(); let reject!: (e: unknown) => void;
+  (axios.post as jest.Mock).mockImplementationOnce(() => new Promise((_, r) => { reject = r; }));
+  const first = deletePermanently(s, 'bad', 'op');
+  const duplicate = deletePermanently({ ...s, user: 'u2' }, 'other', 'other-op');
+  expect(duplicate).toBe(first);
+  const checked = expect(first).rejects.toThrow('原数据已保留');
+  await new Promise(r => setImmediate(r));
+  expect(axios.post).toHaveBeenCalledTimes(1);
+  await expect(cancelFailedDeletion(s)).rejects.toThrow('不能恢复聊天');
+  reject(refusal(403, s)); await checked;
+  await cancelFailedDeletion(s); expect(isBlocked(s)).toBe(false);
+});
+
+test('cancel storage failure preserves the block and history until durable cancellation', async () => {
+  const s = scope(); await writeMessages(s, 'history');
+  (axios.post as jest.Mock).mockRejectedValueOnce(refusal(403, s));
+  await expect(deletePermanently(s, 'bad', 'op')).rejects.toThrow('未执行');
+  (AsyncStorage.removeItem as jest.Mock).mockRejectedValueOnce(new Error('disk failed'));
+  await expect(cancelFailedDeletion(s)).rejects.toThrow('disk failed');
+  expect(isBlocked(s)).toBe(true); expect((await deletionState(s))?.phase).toBe('failed');
+  await cancelFailedDeletion(s);
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history');
+});
+
+test('retry queued during cancellation reinstates its fence before dispatch', async () => {
+  const s = scope(); (axios.post as jest.Mock).mockRejectedValue(refusal(403, s));
+  await expect(deletePermanently(s, 'bad', 'op')).rejects.toThrow('未执行');
+  const cancellation = cancelFailedDeletion(s);
+  const retry = deletePermanently(s, 'bad', 'new-op');
+  const checked = expect(retry).rejects.toThrow('未执行');
+  await cancellation;
+  expect(isBlocked(s)).toBe(true);
+  await checked; expect((await deletionState(s))?.phase).toBe('failed');
+});
+
+// Fresh module memory plus the SAME durable disk emulates process restart.
+function restartClient() {
+  let storage!: typeof import('../services/characterStorage');
+  let deletion!: typeof import('../services/characterDeletion');
+  jest.isolateModules(() => {
+    jest.doMock('@react-native-async-storage/async-storage', () => ({ __esModule: true, default: AsyncStorage }));
+    jest.doMock('axios', () => ({ __esModule: true, default: axios }));
+    storage = require('../services/characterStorage');
+    deletion = require('../services/characterDeletion');
+  });
+  return { storage, deletion };
+}
+
+test('restart preserves definite failure cancellation, data and continued chat; no credential saved', async () => {
+  const s = scope(); await writeMessages(s, 'history');
+  (axios.post as jest.Mock).mockRejectedValueOnce(refusal(403, s));
+  await expect(deletePermanently(s, 'secret-that-must-not-persist', 'op')).rejects.toThrow('未执行');
+  expect(JSON.stringify(await AsyncStorage.multiGet(await AsyncStorage.getAllKeys()))).not.toContain('secret-that-must-not-persist');
+  const { storage } = restartClient();
+  await storage.initializeCharacterStorage(s.server, s.user);
+  expect(storage.isBlocked(s)).toBe(true); expect((await storage.deletionState(s))?.phase).toBe('failed');
+  await storage.cancelFailedDeletion(s);
+  await storage.writeMessages(storage.captureWriteScope(s), 'history + resumed');
+  const next = restartClient().storage;
+  await next.initializeCharacterStorage(s.server, s.user);
+  expect(next.isBlocked(s)).toBe(false); expect(await next.pendingDeletions(s.server, s.user)).toEqual([]);
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history + resumed');
+});
+
+test.each(['crash-before-response', 'legacy-pending'])('restart of %s cannot be cleared by 403 or status absence', async variant => {
+  const s = scope(); await writeMessages(s, 'history'); await beginDeletion(s, 'original');
+  if (variant === 'legacy-pending') {
+    const key = (await AsyncStorage.getAllKeys()).find(k => k.startsWith('character_delete:'))!;
+    const saved = JSON.parse((await AsyncStorage.getItem(key))!); delete saved.previousOutcomeUnknown;
+    await AsyncStorage.setItem(key, JSON.stringify(saved));
+  }
+  const { storage, deletion } = restartClient();
+  await storage.initializeCharacterStorage(s.server, s.user);
+  (axios.post as jest.Mock).mockRejectedValueOnce(refusal(403, s, 'original'));
+  (axios.get as jest.Mock).mockResolvedValueOnce({ data: { status: 'not_committed' } });
+  await expect(deletion.deletePermanently(s, 'bad', 'new')).rejects.toThrow('结果未知');
+  await expect(storage.cancelFailedDeletion(s)).rejects.toThrow('不能恢复聊天');
+  const next = restartClient().storage; await next.initializeCharacterStorage(s.server, s.user);
+  expect(next.isBlocked(s)).toBe(true); expect((await next.deletionState(s))?.operationId).toBe('original');
+  expect(await AsyncStorage.getItem(messageKey(s))).toBe('history');
+});
+
+test('retrying a definite failure can delete, but a timeout makes it non-cancellable', async () => {
+  const s = scope(); (axios.post as jest.Mock).mockRejectedValueOnce(refusal(403, s)).mockRejectedValueOnce(new Error('timeout'));
+  (axios.get as jest.Mock).mockRejectedValueOnce({ response: { status: 403 } });
+  await expect(deletePermanently(s, 'bad', 'op')).rejects.toThrow('未执行');
+  await expect(deletePermanently(s, 'valid', 'unused')).rejects.toThrow('结果未知');
+  await expect(cancelFailedDeletion(s)).rejects.toThrow('不能恢复聊天');
+  (axios.post as jest.Mock).mockResolvedValueOnce({ data: { status: 'deleted', character_id: s.id } });
+  await deletePermanently(s, 'valid', 'unused');
+  expect((await deletionState(s))?.phase).toBe('complete');
+  await expect(cancelFailedDeletion(s)).rejects.toThrow('不能恢复聊天');
 });

@@ -1,0 +1,41 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+Starting Metro Bundler
+| (node:33) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+| (Use `node --trace-warnings ...` to show where the warning was created)
+| (node:40) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+| (Use `node --trace-warnings ...` to show where the warning was created)
+| (node:48) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+| (Use `node --trace-warnings ...` to show where the warning was created)
+| (node:34) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+| (Use `node --trace-warnings ...` to show where the warning was created)
+| (node:42) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+| (Use `node --trace-warnings ...` to show where the warning was created)
+| (node:41) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+| (Use `node --trace-warnings ...` to show where the warning was created)
+Android node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (1594/1594)
+Android Bundled 6043ms node_modules/expo-router/entry.js (1594 modules)
+Android node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (1594/1594)
+
+› Assets (26):
+assets/fonts/LongCang-Regular.ttf (5.16 MB)
+assets/gojo_chibi.png (363 kB)
+node_modules/@react-navigation/elements/lib/module/assets/back-icon-mask.png (653 B)
+node_modules/@react-navigation/elements/lib/module/assets/back-icon.png (4 variations | 152 B)
+node_modules/@react-navigation/elements/lib/module/assets/clear-icon.png (4 variations | 425 B)
+node_modules/@react-navigation/elements/lib/module/assets/close-icon.png (4 variations | 235 B)
+node_modules/@react-navigation/elements/lib/module/assets/search-icon.png (4 variations | 599 B)
+node_modules/expo-router/assets/arrow_down.png (9.46 kB)
+node_modules/expo-router/assets/error.png (469 B)
+node_modules/expo-router/assets/file.png (138 B)
+node_modules/expo-router/assets/forward.png (188 B)
+node_modules/expo-router/assets/pkg.png (364 B)
+node_modules/expo-router/assets/sitemap.png (465 B)
+node_modules/expo-router/assets/unmatched.png (4.75 kB)
+
+› android bundles (1):
+_expo/static/js/android/entry-0b8dbb232c91b73b3d3c5eb008ff704f.hbc (4.69 MB)
+
+› Files (1):
+metadata.json (1.91 kB)
+
+Exported: /workspace/scratch/8ce4996a0331/android-followup-bundle

@@ -92,6 +92,12 @@ def test_auth_old_routes_and_exact_confirmation(database):
     for legacy in ['/characters/gojo','/character/gojo']: assert client.delete(legacy).status_code==409
     assert client.post('/characters/gojo/permanent-deletion',json=body).status_code==403
     assert client.post('/characters/gojo/permanent-deletion',json={**body,'user_id':'admin'}).status_code==403
+    assert client.post('/characters/gojo/permanent-deletion',json=body,
+                       headers={'X-Character-Delete-Key':'wrong-test-key'}).status_code==403
+    assert execute('SELECT id FROM characters',fetch=True)==[('gojo',)]
+    assert execute('SELECT count(*) FROM character_tombstones',fetch=True)==[(0,)]
+    # A rejected delete must leave the normal role write path usable.
+    execute("INSERT INTO short_memory (character_id,content) VALUES ('gojo','chat after refusal')")
     headers={'X-Character-Delete-Key':os.environ['CHARACTER_DELETE_ADMIN_KEY']}
     assert client.post('/characters/gojo/permanent-deletion',json={**body,'confirmed_character_id':'Gojo'},headers=headers).status_code==400
     assert client.post('/characters/gojo/permanent-deletion',json=body,headers=headers).status_code==200
@@ -390,3 +396,62 @@ def test_unattributed_orphan_comment_blocks_purge(database):
     execute('ALTER TABLE char_diary_comment ENABLE TRIGGER gojo_character_row_guard')
     with pytest.raises(PurgeBlocked):purge()
     assert execute('SELECT id FROM characters',fetch=True)==[('gojo',)]
+
+
+@pytest.mark.parametrize('failure', ['blocked', 'lock', 'deadlock', 'unexpected'])
+def test_route_proves_only_known_rollbacks_and_keeps_original_data(database, monkeypatch, failure):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import character_deletion as service
+    from route_character_deletion import router
+    seed_all()
+    tables = ['characters', *service.DIRECT_TABLES, 'char_diary_comment', 'diary_book', 'memory_jobs', 'character_tombstones']
+    before = {table: execute(sql.SQL('SELECT * FROM {} ORDER BY 1').format(sql.Identifier(table)), fetch=True) for table in tables}
+    errors = {'blocked': service.PurgeBlocked, 'lock': psycopg2.errors.LockNotAvailable,
+              'deadlock': psycopg2.errors.DeadlockDetected, 'unexpected': RuntimeError}
+    original = service.json.dumps
+    def fail(value, *args, **kwargs):
+        if isinstance(value, dict) and 'characters' in value:
+            raise errors[failure]('injected AFTER business deletes')
+        return original(value, *args, **kwargs)
+    monkeypatch.setattr(service.json, 'dumps', fail)
+    app = FastAPI(); app.include_router(router); client = TestClient(app, raise_server_exceptions=False)
+    op = str(uuid.uuid4()); headers = {'X-Character-Delete-Key': os.environ['CHARACTER_DELETE_ADMIN_KEY']}
+    response = client.post('/characters/gojo/permanent-deletion', headers=headers, json={
+        'operation_id': op, 'confirmed_character_id': 'gojo', 'confirm_all_users': True})
+    if failure == 'unexpected':
+        assert response.status_code == 500
+        assert 'character_delete_rolled_back' not in response.text
+    else:
+        assert response.status_code == 409
+        detail = response.json()['detail']
+        assert detail['code'] == 'character_delete_rolled_back'
+        assert detail['operation_id'] == op and detail['character_id'] == 'gojo'
+    for table, rows in before.items():
+        assert execute(sql.SQL('SELECT * FROM {} ORDER BY 1').format(sql.Identifier(table)), fetch=True) == rows
+    assert client.get('/character-deletions/' + op, headers=headers).json()['status'] == 'not_committed'
+    execute("INSERT INTO short_memory (character_id,content) VALUES ('gojo','chat after rollback')")
+
+
+def test_route_actual_lock_timeout_has_correlated_rollback_receipt(database, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from db import get_conn
+    import route_character_deletion as route
+    from character_deletion import purge_character
+    seed_char(); writer = get_conn()
+    writer.cursor().execute("INSERT INTO short_memory (character_id,content) VALUES ('gojo','inflight chat')")
+    monkeypatch.setattr(route, 'purge_character', lambda cid, op: purge_character(cid, op, lock_timeout_ms=50))
+    app = FastAPI(); app.include_router(route.router); client = TestClient(app)
+    op = str(uuid.uuid4()); headers = {'X-Character-Delete-Key': os.environ['CHARACTER_DELETE_ADMIN_KEY']}
+    body = {'operation_id': op, 'confirmed_character_id': 'gojo', 'confirm_all_users': True}
+    try:
+        response = client.post('/characters/gojo/permanent-deletion', json=body, headers=headers)
+        assert response.status_code == 409
+        assert response.json()['detail']['code'] == 'character_delete_rolled_back'
+        assert response.json()['detail']['operation_id'] == op
+    finally:
+        writer.commit(); writer.close()
+    assert execute('SELECT id FROM characters', fetch=True) == [('gojo',)]
+    assert execute('SELECT content FROM short_memory', fetch=True) == [('inflight chat',)]
+    assert client.post('/characters/gojo/permanent-deletion', json=body, headers=headers).status_code == 200

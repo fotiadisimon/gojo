@@ -1,4 +1,4 @@
-import { Scope, scopeKey, messageKey, audioDirectory, proactiveKey, migrateLegacy, guardedWrite, writeMessages, setUnread, isBlocked, subscribeDeletion } from '../../services/characterStorage';
+import { Scope, captureWriteScope, scopeKey, messageKey, audioDirectory, proactiveKey, migrateLegacy, guardedWrite, writeMessages, setUnread, isBlocked, subscribeDeletion } from '../../services/characterStorage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Audio } from 'expo-av';
@@ -118,7 +118,7 @@ export default function ChatRoom() {
   const groupId = isGroup ? Number(chatId.replace('group_', '')) : null;
 
   // Capture server/user at mount: an old request must not follow settings changes.
-  const scope = React.useMemo<Scope>(() => ({ server: SERVER_URL, user: FIXED_USER_ID, id: chatId }), [chatId]);
+  const scope = React.useMemo<Scope>(() => captureWriteScope({ server: SERVER_URL, user: FIXED_USER_ID, id: chatId }), [chatId]);
   const STORAGE_KEY = messageKey(scope);
   const AUDIO_DIR = audioDirectory(scope);
   const PROACTIVE_KEY = proactiveKey(scope);

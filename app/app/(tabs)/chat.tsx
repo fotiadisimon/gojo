@@ -1,5 +1,5 @@
 import DeleteCharacterModal, { DeleteTarget } from '../../components/DeleteCharacterModal';
-import { pendingDeletions } from '../../services/characterStorage';
+import { DeleteState, pendingDeletions } from '../../services/characterStorage';
 // 聊天 tab —— 角色列表
 // 点角色 → 进单聊；点 ➕ → 新建角色；长按 → 编辑/删除
 import axios from 'axios';
@@ -30,7 +30,7 @@ export default function ChatListScreen() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [target, setTarget] = useState<DeleteTarget | null>(null);
-  const [pending, setPending] = useState<DeleteTarget[]>([]);
+  const [pending, setPending] = useState<DeleteState[]>([]);
 
   const load = async () => {
     setErr('');
@@ -82,7 +82,7 @@ export default function ChatListScreen() {
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 30 }}>
           {pending.map(p => <TouchableOpacity key={p.id} onPress={() => setTarget(p)} style={s.errBox}>
-            <Text style={s.errText}>角色 {p.id}：删除操作待完成 · 点击查询／重试</Text>
+            <Text style={s.errText}>角色 {p.id}：{p.phase === 'failed' ? '删除未执行或已回滚 · 点击取消／重试' : '删除操作待完成 · 点击查询／重试'}</Text>
           </TouchableOpacity>)}
           {err ? (
             <View style={s.errBox}>
