@@ -1,4 +1,4 @@
-import { Scope, captureWriteScope, scopeKey, messageKey, audioDirectory, proactiveKey, migrateLegacy, guardedWrite, writeMessages, setUnread, isBlocked, subscribeDeletion } from '../../services/characterStorage';
+import { Scope, captureWriteScope, scopeKey, messageKey, audioDirectory, proactiveKey, migrateLegacy, guardedWrite, writeMessages, setUnread, isBlocked, subscribeDeletion, ensureAudioDirectory, writeAudioFile, clearAudioDirectory } from '../../services/characterStorage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Audio } from 'expo-av';
@@ -172,29 +172,13 @@ export default function ChatRoom() {
   }), [scope]);
 
   // ── 语音文件工具 ──
-  const ensureAudioDir = async () => {
-    try {
-      if (!alive()) return;
-      const info = await FileSystem.getInfoAsync(AUDIO_DIR);
-      if (!info.exists) {
-        await FileSystem.makeDirectoryAsync(AUDIO_DIR, { intermediates: true });
-      }
-    } catch (e) { console.warn('ensureAudioDir', e); }
-  };
-  const saveAudioFile = async (msgId: string, base64: string): Promise<string | null> => {
-    return await guardedWrite(scope, async () => {
-      await ensureAudioDir();
-      const uri = `${AUDIO_DIR}${encodeURIComponent(msgId)}.mp3`;
-      await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
-      return uri;
-    }) ?? null;
-  };
+  const saveAudioFile = (msgId: string, base64: string) => writeAudioFile(scope, msgId, base64);
   // ★ 不再按条数自动删音频——老消息的重播要永久可用。
   //   万一哪天占用太大，可在"清空记录"里一并清掉。
   const pruneAudioFiles = async () => { /* no-op：保留全部语音 */ };
   const loadAudioIndex = async () => {
     try {
-      await guardedWrite(scope, ensureAudioDir);
+      await guardedWrite(scope, () => ensureAudioDirectory(scope));
       if (!alive()) return;
       const files = await FileSystem.readDirectoryAsync(AUDIO_DIR);
       const map: Record<string, string> = {};
@@ -1086,7 +1070,7 @@ export default function ChatRoom() {
           setMessages([]);
           audioCacheRef.current = {};
           await AsyncStorage.removeItem(STORAGE_KEY);
-          try { await FileSystem.deleteAsync(AUDIO_DIR, { idempotent: true }); } catch {}
+          try { await clearAudioDirectory(scope); } catch {}
           // ★ 群聊以服务器为准：不清服务器的话，一进群又全回来了
           if (isGroup && groupId != null) {
             try { await axios.delete(`${scope.server}/group/${groupId}/messages`); } catch {}
@@ -1118,7 +1102,7 @@ export default function ChatRoom() {
         const uri = audioCacheRef.current[msg.id];
         if (uri) {
           delete audioCacheRef.current[msg.id];
-          try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+          try { await guardedWrite(scope, () => FileSystem.deleteAsync(uri, { idempotent: true })); } catch {}
         }
       }},
     ]);

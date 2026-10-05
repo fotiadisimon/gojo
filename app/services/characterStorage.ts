@@ -13,10 +13,46 @@ export type DeleteState = Scope & {
 export const normalizeServer = (server: string) => server.trim().replace(/\/+$/, '');
 export const scopeKey = (s: Scope) => JSON.stringify([normalizeServer(s.server), s.user, s.id]);
 const token = (s: Scope) => encodeURIComponent(scopeKey(s));
+const chunkToken = (value: string): string[] => {
+  const chunks: string[] = [];
+  for (let start = 0; start < value.length;) {
+    let end = Math.min(start + 80, value.length);
+    if (end < value.length) {
+      if (value[end - 1] === '%') end -= 1;
+      else if (value[end - 2] === '%') end -= 2;
+    }
+    chunks.push(value.slice(start, end));
+    start = end;
+  }
+  return chunks;
+};
 export const messageKey = (s: Scope) => `chat_v2:${token(s)}:messages`;
 export const unreadKey = (s: Scope) => `chat_v2:${token(s)}:unread`;
 export const proactiveKey = (s: Scope) => `chat_v2:${token(s)}:proactive`;
-export const audioDirectory = (s: Scope) => `${FileSystem.documentDirectory}chat_v2/${token(s).match(/.{1,80}/g)!.join('/')}/files/`;
+export const audioDirectory = (s: Scope) => `${FileSystem.documentDirectory}chat_v2/${chunkToken(token(s)).join('/')}/files/`;
+export async function ensureAudioDirectory(s: Scope): Promise<void> {
+  const dir = audioDirectory(s);
+  const info = await FileSystem.getInfoAsync(dir);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  else if (!info.isDirectory) throw new Error(`Audio cache path is not a directory: ${dir}`);
+}
+export async function writeAudioFile(s: Scope, msgId: string, base64: string): Promise<string | null> {
+  if (!msgId || !base64) return null;
+  try {
+    return await guardedWrite(s, async () => {
+      await ensureAudioDirectory(s);
+      const uri = `${audioDirectory(s)}${encodeURIComponent(msgId)}.mp3`;
+      await FileSystem.writeAsStringAsync(uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+      return uri;
+    }) ?? null;
+  } catch (error) {
+    console.warn('saveAudioFile', error);
+    return null;
+  }
+}
+export function clearAudioDirectory(s: Scope): Promise<void | undefined> {
+  return guardedWrite(s, () => FileSystem.deleteAsync(audioDirectory(s), { idempotent: true }));
+}
 const deletionKey = (s: Scope) => JSON.stringify([normalizeServer(s.server), s.id]);
 const stateKey = (s: Scope) => `character_delete:${encodeURIComponent(deletionKey(s))}`;
 const LEGACY_OWNER = 'chat_legacy_owner_v1';
